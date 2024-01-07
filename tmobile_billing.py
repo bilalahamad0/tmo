@@ -1,12 +1,13 @@
 """
 Read pdf file
-parse data for each numbers --> Total
+parse data for each number --> Total
 Map with name
 generate summarized bill
 
 """
 
 import math
+import sys
 from PyPDF2 import PdfReader
 
 filename = "SummaryBillJan2024.pdf"
@@ -18,8 +19,8 @@ reader = PdfReader(file)
 number_of_pages = len(reader.pages)
 page = reader.pages[1]
 text = page.extract_text().split('\n')
+base_charge = 0
 
-# print(text)
 print('#'*21)
 month_name = text[1].split(',')[0] + "," + text[1].split(',')[1][:5]
 if 'Totals' in text[6]:
@@ -28,7 +29,8 @@ if 'Totals' in text[6]:
 
 if 'Account' in text[7]:
     base_charge = float(text[7].split()[-1][1:])
-    # print(base_charge)
+else:
+    sys.exit(-1)
 
 counter = 0
 final_dict = dict()
@@ -38,12 +40,9 @@ for _ in text:
         phone_number = temp_[0] + temp_[1]
         bill = float(temp_[-1][1:])
         final_dict[phone_number] = bill
-        # print(phone_number, bill)
         counter += 1
     if counter > 6:
         break
-
-# print(final_dict)
 
 name_mapping = {'(847)443-5295': 'Bilal',
                 '(703)479-8351': 'Bilal2',
@@ -62,11 +61,9 @@ ba_im = 0
 send_to_sachin = 0
 for k, v in enumerate(final_dict):
     bill = final_dict[v]
-    # print(k, v)
     if name_mapping[v] == 'Bilal2':
         bill -= 10.0
     bill += member_base_charge
-    # print(round(bill, 2))
     total_check += bill
     if name_mapping[v] == 'Bilal' or name_mapping[v] == 'Karan' or name_mapping[v] == 'Bilal2':
         send_to_sachin += bill
@@ -75,6 +72,7 @@ for k, v in enumerate(final_dict):
             continue
         ba_im += bill
     print(f'{name_mapping[v]}: {round(bill, 2)}')
+
 print('#'*21)
 print(f'Total Bill: {round(total_check, 2)}')
 print('#'*21)
