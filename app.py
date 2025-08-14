@@ -195,55 +195,69 @@ def parse_bill(pdf_path: str) -> dict:
         return None
 
 
-from twilio.rest import Client
+import requests
 
 def send_whatsapp_notification(bill_data: dict):
     """
-    Sends the bill summary to a list of recipients via WhatsApp using Twilio.
+    Sends the bill summary to a list of recipients via the Meta Cloud API.
 
     Args:
         bill_data: A dictionary containing the formatted bill summary.
     """
-    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
-    twilio_phone = os.getenv("TWILIO_PHONE_NUMBER")
+    api_token = os.getenv("META_API_TOKEN")
+    sender_id = os.getenv("SENDER_PHONE_NUMBER_ID")
     recipient_phones_str = os.getenv("RECIPIENT_PHONE_NUMBERS")
+    api_version = "v17.0"
 
-    if not all([account_sid, auth_token, twilio_phone, recipient_phones_str]):
-        print("Error: Twilio credentials or recipient phone numbers are not fully set.")
-        print("Please set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER, and RECIPIENT_PHONE_NUMBERS.")
+    if not all([api_token, sender_id, recipient_phones_str]):
+        print("Error: Meta API credentials are not fully set.")
+        print("Please set META_API_TOKEN, SENDER_PHONE_NUMBER_ID, and RECIPIENT_PHONE_NUMBERS.")
         return
 
-    try:
-        client = Client(account_sid, auth_token)
-        recipients = [phone.strip() for phone in recipient_phones_str.split(',')]
+    url = f"https://graph.facebook.com/{api_version}/{sender_id}/messages"
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Content-Type": "application/json",
+    }
 
-        # Construct the message body
-        separator = "\n" + "#"*21 + "\n"
-        message_body = separator.join([
-            bill_data["header"],
-            "\n".join(bill_data["final_summary"]),
-            bill_data["total_bill"],
-            "\n".join(bill_data["special_summary"])
-        ])
+    recipients = [phone.strip() for phone in recipient_phones_str.split(',')]
 
-        print(f"Constructed Message Body:\n{message_body}")
+    # Construct the message body
+    separator = "\n" + "#"*21 + "\n"
+    message_body = separator.join([
+        bill_data["header"],
+        "\n".join(bill_data["final_summary"]),
+        bill_data["total_bill"],
+        "\n".join(bill_data["special_summary"])
+    ])
 
-        for recipient_phone in recipients:
-            if not re.match(r"\+\d+", recipient_phone):
-                print(f"Invalid phone number format: {recipient_phone}. It must be in E.164 format (e.g., +14155238886).")
-                continue
+    print(f"Constructed Message Body:\n{message_body}")
 
-            print(f"Sending WhatsApp message to {recipient_phone}...")
-            message = client.messages.create(
-                from_=f'whatsapp:{twilio_phone}',
-                body=message_body,
-                to=f'whatsapp:{recipient_phone}'
-            )
-            print(f"Message sent to {recipient_phone} with SID: {message.sid}")
+    for recipient_phone in recipients:
+        # The Meta API expects a clean E.164 number without any prefixes
+        if not re.match(r"\+\d+", recipient_phone):
+            print(f"Invalid phone number format: {recipient_phone}. It must be in E.164 format (e.g., +14155238886).")
+            continue
 
-    except Exception as e:
-        print(f"An error occurred while sending WhatsApp notification: {e}")
+        json_data = {
+            "messaging_product": "whatsapp",
+            "to": recipient_phone,
+            "type": "text",
+            "text": {"body": message_body},
+        }
+
+        try:
+            print(f"Sending WhatsApp message to {recipient_phone} via Meta API...")
+            response = requests.post(url, headers=headers, json=json_data, timeout=10)
+            response.raise_for_status()  # Raises an HTTPError for bad responses (4xx or 5xx)
+
+            print(f"Message sent successfully to {recipient_phone}.")
+            print(f"Response: {response.json()}")
+
+        except requests.exceptions.RequestException as e:
+            print(f"An error occurred while sending WhatsApp notification to {recipient_phone}: {e}")
+            if e.response:
+                print(f"Error Response Body: {e.response.text}")
 
 
 async def main():
