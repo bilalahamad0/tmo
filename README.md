@@ -1,20 +1,57 @@
 # T-Mobile Bill → Zelle End-to-End Automation
 
-Hands-off monthly handler for the T-Mobile bill: detects when a new bill is posted, downloads the PDF, parses the per-line charges, emails a styled breakdown to recipients, sends the special-pool amount via Zelle from Bank of America, and emails a payment confirmation. Failures at any stage email an alert.
+Hands-off monthly handler for the T-Mobile bill on macOS:
+
+- Detects the new bill via T-Mobile's "Your bill is ready" SMS (read from Messages chat.db)
+- Logs into the T-Mobile portal, downloads the PDF (Playwright + persistent profile)
+- Parses per-line charges and the special-pool amount the bill-payer owes (or is owed)
+- Emails a styled HTML breakdown with the original PDF attached
+- Pays the special-pool amount via Zelle from Bank of America (multi-step flow, Pay button, OTP auto-fill from Messages)
+- Emails a payment confirmation
+- Emails a failure alert + screenshots if any stage breaks
+
+A single confirmed payment per month is enforced by an idempotent state file. Once `zelle_confirmed_at` is set, no automated re-payment is possible.
+
+> **Status:** Production-tested. May 2026 bill ($207.38 total → $102.43 special pool) processed end-to-end with no manual intervention.
+
+---
 
 ## Pipeline
 
 ```
-[1] T-Mobile portal: is a new bill posted?  →  [2] Download PDF
-                                                      ↓
-[7] Confirmation email ← [6] Zelle live send ← [5] Safety gate ← [4] Bill summary email ← [3] Parse PDF
-                                                                                                ↓
-                                                                          Failure at any stage → [Alert email]
+[0] Detect T-Mobile bill SMS in Messages.app          (skip portal login if absent)
+        ↓
+[1] Log into T-Mobile (push 2FA, persistent profile)
+[2] Read 'Bill posted MM/DD/YYYY' / Download PDF
+[3] Parse per-line charges + computed totals
+[4] Send styled bill summary email (with PDF)
+[5] Safety gate: amount cap, recipient match, idempotency
+[6] BoA login → Pay {recipient} → Amount → Date → Pay (live or dry-run)
+[7] Confirmation email with transaction ID
+
+Failure at any stage → failure alert email + debug screenshot
 ```
 
-State for the current month lives at `~/.tmo_state/bill_<YYYY-MM>.json`. The orchestrator reads this on every run, so it's safe to fire as many times as the LaunchAgent wants — once a stage is done, it's not re-done.
+Each stage records its outcome to `~/.tmo_state/bill_<YYYY-MM>.json`. A re-run skips already-completed stages — safe to re-fire any number of times.
 
-The hard guard against double-paying: once `zelle_confirmed_at` is set in state, the pipeline refuses to send Zelle again for that month. If Zelle was attempted but never confirmed (e.g. crash mid-flow), it emails an alert instead of retrying — manual review required.
+---
+
+## Repository layout
+
+| File | Role |
+|---|---|
+| `app.py` | Stage-aware orchestrator, PDF parser, top-level error handling |
+| `download_bill.py` | T-Mobile login + bill-page navigation + PDF download (Playwright) |
+| `zelle_pay.py` | BoA login + Zelle multi-step send + confirmation capture (Playwright) |
+| `notify.py` | SMTP helpers — bill summary, confirmation, failure-alert, 2FA-prompt emails |
+| `sms_utils.py` | macOS Messages chat.db reader — bill SMS detection + OTP auto-fill |
+| `state.py` | Atomic JSON state file at `~/.tmo_state/bill_<YYYY-MM>.json` |
+| `security_utils.py` | macOS Keychain helpers for sensitive credentials |
+| `auto_process.sh` | Thin shell entrypoint invoked by the LaunchAgent |
+| `com.example.tmobile_automation.plist` | LaunchAgent template (sed-substituted at install) |
+| `tests/` | Unit tests for state, notify, parser, sms_utils, security |
+
+---
 
 ## Setup
 
@@ -25,43 +62,54 @@ python3 -m venv tmobile_env
 ./tmobile_env/bin/playwright install chromium
 ```
 
-### 2. Credentials in macOS Keychain (sensitive)
+### 2. Sensitive credentials in macOS Keychain
 
-By default the code uses your current macOS username (`$USER`) as the Keychain account name. Override with `KEYCHAIN_ACCOUNT` env var if you prefer a different identifier.
+The code uses `$USER` as the Keychain account name by default (override with `KEYCHAIN_ACCOUNT` env var if needed):
 
 ```bash
 security add-generic-password -s "TMobile_User"           -a "$USER" -w "your_tmo_user"
 security add-generic-password -s "TMobile_Pass"           -a "$USER" -w "your_tmo_pass"
 security add-generic-password -s "BoA_Username"           -a "$USER" -w "your_boa_id"
 security add-generic-password -s "BoA_Password"           -a "$USER" -w "your_boa_pass"
-security add-generic-password -s "ZELLE_RECIPIENT_NAME"   -a "$USER" -w "Recipient Name"
+security add-generic-password -s "ZELLE_RECIPIENT_NAME"   -a "$USER" -w "Recipient Name As Shown In BoA"
 security add-generic-password -s "ZELLE_AMOUNT_CAP"       -a "$USER" -w "300"
 
-# Optional: last-4 of the phone number BoA texts the SMS OTP to.
-# If your BoA login presents multiple SMS-target options, this is used to
-# click the right one. Leave unset if BoA only offers one option.
+# Optional — last 4 digits of phone for SMS-MFA selection on banks that
+# offer multiple OTP-target options. Leave unset if BoA shows only one.
 security add-generic-password -s "BoA_MFA_Phone_Last4"    -a "$USER" -w "1234"
 ```
 
-`ZELLE_AMOUNT_CAP` is the maximum dollar amount the automation will auto-send. If a bill's special-pool amount exceeds the cap, the pipeline aborts and emails a failure alert — manual review required.
+`ZELLE_AMOUNT_CAP` is a hard upper bound on auto-sends. Bills exceeding it abort the pipeline and email a failure alert for manual review.
 
-### 3. Configuration in `.env` (non-sensitive)
+`ZELLE_RECIPIENT_NAME` must match the **exact text** Bank of America renders next to the contact in your Zelle list. The recipient finder uses an exact accessible-name match first (excludes "Edit X" / "Delete X" buttons that share the recipient's name).
+
+### 3. Non-sensitive configuration in `.env`
+
 ```bash
 cp .env.example .env
 ```
+
 Then edit:
+
 ```env
+# Gmail SMTP — use an App Password, not your account password.
+# https://myaccount.google.com/apppasswords
 SMTP_EMAIL=your_email@gmail.com
 SMTP_PASSWORD=your_gmail_app_password
+
+# Bill summary email recipients (comma-separated)
 RECIPIENT_EMAILS=person1@example.com,person2@example.com
 
-# Optional: send confirmation/alert emails to a different audience
-CONFIRMATION_RECIPIENTS=you@example.com           # defaults to RECIPIENT_EMAILS
-FAILURE_ALERT_EMAIL=you@example.com               # defaults to first RECIPIENT_EMAILS
-MFA_ALERT_EMAIL=you@example.com                   # defaults to FAILURE_ALERT_EMAIL
+# Optional - narrow the audience for confirmation/alert emails
+# CONFIRMATION_RECIPIENTS=you@example.com           # defaults to RECIPIENT_EMAILS
+# FAILURE_ALERT_EMAIL=you@example.com               # defaults to first RECIPIENT_EMAILS
+# MFA_ALERT_EMAIL=you@example.com                   # defaults to FAILURE_ALERT_EMAIL
 
+# JSON map of phone-number-keys -> display names. Keys must match T-Mobile's
+# PDF format (with parentheses around area code).
 USER_MAPPING='{"(123)456-7890": "Alice", "(098)765-4321": "Bob"}'
 
+# Names whose share is rolled into a 'special pool' that gets Zelle'd.
 SPECIAL_POOL_NAMES=Alice
 SPECIAL_POOL_TITLE=Premium Pool
 SPECIAL_POOL_DESC=Coverage for Alice
@@ -70,105 +118,123 @@ SPECIAL_POOL_DESC=Coverage for Alice
 ZELLE_LIVE_SEND=0
 ```
 
+`.env` is gitignored — never commit it.
+
 ### 4. macOS LaunchAgent (scheduled run)
 
-The plist is shipped as a template — substitute your absolute repo path and install:
+The plist ships as a **template** — LaunchAgent plists don't expand `$HOME`, so the absolute path must be substituted at install time:
 
 ```bash
 sed "s|__REPO_PATH__|$PWD|g" com.example.tmobile_automation.plist \
   > ~/Library/LaunchAgents/com.example.tmobile_automation.plist
+
 launchctl load ~/Library/LaunchAgents/com.example.tmobile_automation.plist
+launchctl list | grep tmobile   # verify registered
 ```
 
-Schedule: 9:00 AM on days 6, 7, 8, 9, 10 of each month. Each run re-checks the portal — if no new bill is posted yet, it exits silently and tries again the next scheduled day.
+Schedule: 9:00 AM on days 6, 7, 8, 9, 10 of each month. Stage 0 makes most of those runs no-ops (returns early when no fresh SMS or already paid).
 
 ### 5. Sleep-aware wake (one-time)
-`StartCalendarInterval` does NOT wake a sleeping Mac. Schedule a daily wake just before the agent fires:
+
+`StartCalendarInterval` does **not** wake a sleeping Mac. Schedule a daily wake just before the agent fires:
+
 ```bash
 sudo pmset repeat wakeorpoweron MTWRFSU 08:55:00
+pmset -g sched   # verify
 ```
 
-### 6. Full Disk Access for SMS auto-read (one-time)
-The Zelle automation reads bank OTP codes directly from `~/Library/Messages/chat.db` (AppleScript-based reads are unreliable on modern macOS). For this to work, the python binary needs Full Disk Access:
+### 6. Full Disk Access (one-time)
 
-1. Open **System Settings → Privacy & Security → Full Disk Access**
-2. Click the `+` button
-3. Add the python binary that runs the script. Resolve the actual path first (the venv may be a symlink):
-   ```bash
-   readlink -f ./tmobile_env/bin/python
-   ```
-   Use that resolved path. For Terminal-launched runs, granting FDA to **Terminal.app** (or iTerm) is sufficient.
-4. For the LaunchAgent (production schedule), grant FDA to **launchd** so the scheduled run inherits it.
-5. Restart Terminal (the permission only takes effect for newly launched processes).
+The Zelle automation reads bank OTP codes and the T-Mobile bill SMS directly from `~/Library/Messages/chat.db`. AppleScript-based Messages reads are unreliable on modern macOS, so direct sqlite is the only robust path. This **requires** Full Disk Access on the launching process:
 
-If FDA isn't granted, the script will report "PERMISSION DENIED" and OTP auto-fill will fail (you'd have to enter it manually in the open browser window).
+| Use case | Grant FDA to |
+|---|---|
+| Manual run from Terminal / iTerm | **Terminal.app** (or your terminal of choice) |
+| LaunchAgent-scheduled run | **`/sbin/launchd`** |
+
+Open System Settings → Privacy & Security → Full Disk Access → `+`. For `launchd`, use `Cmd+Shift+G` in the picker and paste `/sbin/launchd`. Restart the terminal (or reboot for launchd) for the permission to take effect on new processes.
+
+Without FDA, Stage 0 will report `chat.db PERMISSION DENIED` and exit thinking no SMS exists — the pipeline silently misses bills.
 
 ### 7. Persistent browser profile
-On first run, both T-Mobile and Bank of America will trigger MFA. **Tick "Save this device" / "Trust this device"** when those checkboxes appear — the persistent profile at `~/.tmo_browser_profile` will retain those cookies and skip MFA on subsequent runs (typically for ~30 days). The Zelle script attempts to click the trust prompt automatically, but it's worth verifying on the first manual run.
+
+Both T-Mobile and BoA cache "trust this device" cookies in `~/.tmo_browser_profile/`. **On the first run from each, tick the "Save this device" / "Trust this device" checkbox** if it appears — subsequent runs skip MFA entirely (typically ~30 days). The Zelle script also attempts to click the trust prompt automatically.
+
+---
 
 ## Running manually
 
 ```bash
-# Full pipeline (will hit T-Mobile + BoA, respects state file)
+# Full E2E pipeline. Stage 0 gates on SMS presence; respects state file.
 ./tmobile_env/bin/python app.py
 
-# Skip download stage by passing an existing PDF
+# Skip download stage by passing an existing PDF (also bypasses Stage 0)
 ./tmobile_env/bin/python app.py /path/to/SummaryBill_20260504.pdf
 
-# Re-run even if state shows summary already emailed / Zelle attempted
+# Force re-run: bypass 'summary already emailed' and 'Zelle attempted' gates.
+# zelle_confirmed_at gate is NEVER bypassed - delete state file to truly reset.
 ./tmobile_env/bin/python app.py --force
 
 # Just download (no parse/email/Zelle)
 ./tmobile_env/bin/python download_bill.py
 
-# Just Zelle (testing - reads ZELLE_LIVE_SEND from .env)
+# Just Zelle subsystem (reads ZELLE_LIVE_SEND from .env)
 ./tmobile_env/bin/python zelle_pay.py 75.00
 ```
 
-## $1 test workflow (highly recommended before live)
+---
 
-To validate the BoA login → MFA → recipient → amount → review/send chain without touching the bill pipeline or sending real bill amounts, set the recipient and run a small live transfer to your own account:
+## $1 test workflow (highly recommended before going live)
+
+Validate the BoA login → MFA → recipient → amount → date → review → Pay chain without touching the bill pipeline or sending real bill amounts:
 
 ```bash
-# 1. Point the keychain entry at your own Zelle-registered account
+# 1. Point the keychain entry at your OWN Zelle-registered account
 security add-generic-password -U -s "ZELLE_RECIPIENT_NAME" -a "$USER" -w "Your Own Name"
 
-# 2. Dry-run first - check zelle_review_dryrun.png shows correct amount/recipient
+# 2. Dry-run first - check zelle_review_dryrun.png shows correct amount + recipient
 ZELLE_LIVE_SEND=0 ./tmobile_env/bin/python zelle_pay.py 1.00
 
-# 3. Live $1 test - confirms the Send + confirmation capture work
+# 3. Live $1 test - confirms Send + confirmation capture work
 ZELLE_LIVE_SEND=1 ./tmobile_env/bin/python zelle_pay.py 1.00
 
 # 4. After success, point the keychain back to the real recipient
-security add-generic-password -U -s "ZELLE_RECIPIENT_NAME" -a "$USER" -w "Real Recipient"
+security add-generic-password -U -s "ZELLE_RECIPIENT_NAME" -a "$USER" -w "Real Recipient Name"
 ```
+
+---
 
 ## Going live with Zelle
 
-The Zelle send is **gated by `ZELLE_LIVE_SEND=1`**. With the flag off (default), the BoA flow logs in, navigates to the Review screen, takes a screenshot, and stops without clicking Send. This lets you validate the entire chain — bill detection, download, parse, email, BoA login, recipient match, amount entry — against real services without moving money.
+The live Send click is gated by **`ZELLE_LIVE_SEND=1`**. With the flag off (default), the BoA flow logs in, navigates through Pay → Amount → Date → Review, takes a screenshot at the Review page, and stops without clicking Pay. Lets you validate the entire chain against real services without moving money.
 
 Recommended cutover:
-1. Run with `ZELLE_LIVE_SEND=0` for a full month. Verify the bill summary email looks right and the dry-run screenshot at `zelle_review_dryrun.png` shows the correct amount and recipient.
-2. Set `ZELLE_LIVE_SEND=1` in `.env`.
-3. Watch the next scheduled run. Expect a confirmation email within ~5 minutes of the LaunchAgent firing.
+1. Run with `ZELLE_LIVE_SEND=0` against your previous month's PDF (manual `app.py /path/to/SummaryBill_*.pdf`). Confirm the bill summary email looks right and the dry-run review screenshot shows the correct amount + recipient.
+2. After your $1 test confirms BoA automation works end-to-end, set `ZELLE_LIVE_SEND=1` in `.env`.
+3. Watch the next scheduled run. Confirmation email arrives within ~5 minutes of the LaunchAgent firing.
+
+---
 
 ## State file
 
-Located at `~/.tmo_state/bill_<YYYY-MM>.json`. Fields:
+Located at `~/.tmo_state/bill_<YYYY-MM>.json`. Stage progression:
 
 | Field | Set when |
 |---|---|
-| `bill_posted_date` | After portal detects a new bill |
-| `pdf_path`, `pdf_sha256` | After successful download |
-| `parsed_total`, `special_amount` | After parse |
-| `summary_emailed_at` | After bill summary email sent |
-| `zelle_attempted_at` | Right before clicking Send |
-| `zelle_confirmed_at`, `zelle_confirmation_id`, `zelle_screenshot` | After confirmation page captured |
+| `bill_sms_date`, `bill_sms_balance` | Stage 0 — T-Mobile bill SMS detected |
+| `bill_posted_date` | Stage 1 — portal shows 'Bill posted MM/DD/YYYY' |
+| `pdf_path`, `pdf_sha256` | Stage 2 — PDF downloaded |
+| `parsed_total`, `special_amount` | Stage 3 — PDF parsed |
+| `summary_emailed_at` | Stage 4 — bill summary email sent |
+| `zelle_attempted_at` | Stage 6 — right before clicking Pay (live mode only) |
+| `zelle_confirmed_at`, `zelle_confirmation_id`, `zelle_screenshot` | Stage 6 — confirmation page captured |
 
-To force a re-run for a given month (e.g. after fixing a bug), delete the relevant state file:
-```bash
-rm ~/.tmo_state/bill_2026-05.json
-```
+**Idempotency rules:**
+
+- `zelle_confirmed_at` is the hard lock. Once set, even `--force` cannot trigger another payment for that month. The only way to bypass is `rm ~/.tmo_state/bill_<YYYY-MM>.json`.
+- `zelle_attempted_at` set without `zelle_confirmed_at` (e.g. crash mid-flow) blocks future runs and sends an alert. Manual review required — verify in the BoA app whether the payment actually went through, then either delete state (didn't go through) or set `zelle_confirmed_at` manually (did go through).
+
+---
 
 ## Tests
 
@@ -176,14 +242,79 @@ rm ~/.tmo_state/bill_2026-05.json
 ./tmobile_env/bin/python -m pytest tests/ -v
 ```
 
-Covers: state I/O (atomic writes, idempotency), notify (SMTP mocked, all three email types), parser (page-shift resilience, month detection, posted-date regex), keychain.
+Coverage: state I/O (atomic writes, idempotency), notify (SMTP mocked, all email types), parser (page-shift resilience, month/abbreviation detection, plan-total extraction), sms_utils (chat.db parsing, OTP regex, T-Mobile bill regex, attributedBody decoding), security_utils (Keychain mocked).
 
-Live Zelle/download stay manual — unsafe to mock against real banking.
+Live Zelle/download stay out of the test suite — unsafe to mock against real banking and unrealistic against real T-Mobile.
 
-## Logs
+---
 
-- `automation.log` — LaunchAgent stdout/stderr from every run
-- `download_automation.log` — historical (no longer written; preserved for reference)
-- `~/.tmo_state/bill_<YYYY-MM>.json` — per-bill stage progression
-- `zelle_confirmation_*.png` — confirmation page screenshots
-- `*_error.png` — debug screenshots from failures (login_error.png, zelle_error.png, etc.)
+## Troubleshooting
+
+### "Stage 0: No T-Mobile 'bill is ready' SMS in last 14 days"
+- Check the SMS exists in Messages.app (sender `2535`)
+- Check FDA — `python -c "import sqlite3, os; sqlite3.connect('file:'+os.path.expanduser('~/Library/Messages/chat.db')+'?mode=ro', uri=True).cursor().execute('SELECT 1').fetchall()"` should not raise. If it does, FDA isn't on the python binary's launching process.
+- macOS Big Sur+ stores some message bodies in the binary `attributedBody` blob with NULL `text` column — already handled by `sms_utils._decode_attributed_body`.
+
+### "chat.db PERMISSION DENIED"
+FDA isn't granted. See Setup §6.
+
+### Cookie banner / notification modal blocks clicks
+T-Mobile shows OneTrust + a "T-Mobile Notice" + a MoEngage "stay up to date with notifications" modal. `download_bill._dismiss_overlays` handles all three. The persistent profile remembers your choice after the first dismissal.
+
+### Zelle recipient finder picks "Edit" instead of "Pay"
+BoA renders `Edit Bilal Ahamad`, `Delete Bilal Ahamad`, and `Pay Bilal Ahamad` buttons all matching `:has-text("Bilal Ahamad")`. The finder uses exact accessible-name matching first, then falls back to filtering out edit/delete/manage keywords. If your BoA UI shows different button labels, adjust `EDIT_BUTTON_KEYWORDS` in `zelle_pay.py`.
+
+### Bill amount in email is wrong
+The parser computes the bill total as the sum of per-line charges + base account charge, not from a fragile "Totals" string in the PDF (T-Mobile bills have multiple sub-section "Totals" lines). The "Original Carrier Plan Bill" line uses `_extract_plan_total` which scans for `Plan ... $X.XX` patterns — falls back to computed total if absent.
+
+### LaunchAgent fires but does nothing
+Check `automation.log`. Common reasons:
+- Mac was asleep at 9 AM (set `pmset repeat wakeorpoweron`)
+- FDA not granted to `/sbin/launchd` → chat.db read fails → Stage 0 false-negative
+- Old plist still loaded — `launchctl list | grep tmobile`; bootout obsolete entries
+
+---
+
+## Logs & artifacts
+
+| File | Contents |
+|---|---|
+| `automation.log` | LaunchAgent stdout/stderr from every fire |
+| `~/.tmo_state/bill_<YYYY-MM>.json` | Per-bill stage progression |
+| `zelle_confirmation_*.png` | BoA confirmation page screenshot (saved locally, NOT emailed) |
+| `zelle_review_dryrun.png` | Last dry-run Review screen capture |
+| `zelle_after_recipient.png`, `zelle_after_amount.png` | Multi-step debug captures |
+| `*_error.png`, `mfa_debug.png` | Failure-mode screenshots |
+
+All `*.png` and `*.log` are gitignored.
+
+---
+
+## Security & privacy notes
+
+- **Never commit `.env`.** Use Keychain for everything sensitive.
+- The persistent browser profile at `~/.tmo_browser_profile/` contains live BoA session cookies. macOS file permissions (700 by default for `~/`) protect it; do not share or back it up to a syncing folder.
+- The state file at `~/.tmo_state/bill_*.json` contains transaction confirmation IDs and bill amounts — sensitive but not credentials.
+- Confirmation emails do NOT attach the BoA UI screenshot (the screenshot is saved locally only) to avoid leaking account UI fragments to recipients.
+- Keychain entries are scoped to your macOS user; `security add-generic-password -a "$USER"` is the default.
+- OTP codes are read from `chat.db` and only logged in summary form (never the full 6-digit value).
+
+---
+
+## Architecture decisions
+
+- **Why SQLite, not AppleScript, for Messages reads?** AppleScript's Messages dictionary is deprecated/locked-down on Big Sur+; `tell chat 1` raises syntax errors on modern macOS. Direct `chat.db` reads are version-stable.
+- **Why a persistent browser profile?** First-run MFA fatigue is real. With `~/.tmo_browser_profile/`, BoA's "trust this device" cookie persists ~30 days, making subsequent monthly runs skip MFA entirely.
+- **Why SMS-gated Stage 0 vs. blind calendar runs?** T-Mobile's "Bill posted MM/DD/YYYY" portal text isn't always present, and a calendar-based fire wastes MFA pushes when the bill isn't ready. The SMS arrives reliably from short code `2535` once the bill is posted; gating on it makes "bill ready" a precondition, not a guess.
+- **Why exact-name matching for the BoA Pay button?** Each BoA Zelle recipient row has a Pay, Edit, and Delete button — all containing the recipient's name. `get_by_role("button", name=name, exact=True)` selects only the Pay button (whose accessible name is just the recipient name); fallback iteration filters out edit/delete/manage keywords.
+- **Why store `zelle_confirmed_at` and refuse `--force` to override it?** Banks don't make double-payment trivially reversible. The hard lock requires manual filesystem action (`rm ~/.tmo_state/bill_*.json`), making accidental re-payment essentially impossible.
+
+---
+
+## License & disclaimer
+
+This is personal automation for a personal T-Mobile bill paid via personal Bank of America Zelle. It's published as a reference for similar automations — adapt at your own risk.
+
+The code interacts with T-Mobile and Bank of America websites by clicking through their UI. Both companies may change their UI at any time, breaking selectors. The repo includes debug-screenshot capture and failure alerts so breakage is visible immediately, but you should verify monthly that the confirmation email arrives.
+
+**Do not push your `.env` or `*.png` screenshots to a public repo** — they contain live credentials and account UI respectively.
