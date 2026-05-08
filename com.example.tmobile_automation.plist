@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  T-Mobile bill automation LaunchAgent template.
+
+  Before installing, replace the placeholder __REPO_PATH__ below with the
+  absolute path to your local clone of this repo (LaunchAgent plists do
+  not expand $HOME). Example one-liner:
+
+    sed "s|__REPO_PATH__|$HOME/git_repo/tmo|g" com.example.tmobile_automation.plist \
+      > ~/Library/LaunchAgents/com.example.tmobile_automation.plist
+    launchctl load ~/Library/LaunchAgents/com.example.tmobile_automation.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.example.tmobile_automation</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO_PATH__/auto_process.sh</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key>
+            <integer>9</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+            <key>Day</key>
+            <integer>6</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>9</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+            <key>Day</key>
+            <integer>7</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>9</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+            <key>Day</key>
+            <integer>8</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>9</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+            <key>Day</key>
+            <integer>9</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>9</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+            <key>Day</key>
+            <integer>10</integer>
+        </dict>
+    </array>
+    <key>StandardOutPath</key>
+    <string>__REPO_PATH__/automation.log</string>
+    <key>StandardErrorPath</key>
+    <string>__REPO_PATH__/automation.log</string>
+    <key>WorkingDirectory</key>
+    <string>__REPO_PATH__</string>
+    <key>AbandonProcessGroup</key>
+    <true/>
+</dict>
+</plist>
