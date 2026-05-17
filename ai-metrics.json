@@ -15,8 +15,8 @@
     }
   ],
   "totalTokens": 90000,
-  "totalCommits": 0,
-  "linesOfCode": 0,
+  "totalCommits": 5,
+  "linesOfCode": 2842,
   "devCycleDays": 3,
   "manualEstimateDays": 12,
   "impact": "Zero-touch monthly billing cycle",
