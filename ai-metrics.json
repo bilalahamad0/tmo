@@ -1,0 +1,26 @@
+{
+  "projectId": "tmo",
+  "lastUpdated": "2026-05-17",
+  "aiContribution": 75,
+  "agents": [
+    {
+      "name": "Antigravity",
+      "provider": "Google DeepMind",
+      "period": "Apr 2026",
+      "models": [
+        "Gemini 2.5 Flash"
+      ],
+      "tokens": 90000,
+      "role": "Pipeline scaffolding & automation architecture"
+    }
+  ],
+  "totalTokens": 90000,
+  "totalCommits": 0,
+  "linesOfCode": 0,
+  "devCycleDays": 3,
+  "manualEstimateDays": 12,
+  "impact": "Zero-touch monthly billing cycle",
+  "cycle": "~3 days",
+  "beforeAI": "Manual Python script, ran per request",
+  "afterAI": "Event-driven E2E billing automation"
+}
