@@ -1,0 +1,57 @@
+name: Update AI Metrics
+
+on:
+  repository_dispatch:
+    types: [update-metrics]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-metrics:
+    name: Refresh AI usage stats
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Update ai-metrics.json
+        run: |
+          node << 'JSEOF'
+          const fs = require('fs');
+          const { execSync } = require('child_process');
+          if (!fs.existsSync('ai-metrics.json')) {
+            console.log('No ai-metrics.json -- skipping');
+            process.exit(0);
+          }
+          const metrics = JSON.parse(fs.readFileSync('ai-metrics.json', 'utf8'));
+          const commits = parseInt(execSync('git rev-list --count HEAD').toString().trim(), 10);
+          const exts = /\.(ts|tsx|js|jsx|py|go|java|c|cpp|h|css|mdx|sh)$/;
+          const files = execSync('git ls-files').toString().trim().split('\n')
+            .filter(f => f && exts.test(f) && !f.includes('node_modules'));
+          let loc = 0;
+          for (const f of files) {
+            try { loc += fs.readFileSync(f, 'utf8').split('\n').length; } catch {}
+          }
+          const today = new Date().toISOString().slice(0, 10);
+          metrics.totalCommits = commits;
+          if (loc > 0) metrics.linesOfCode = loc;
+          metrics.lastUpdated = today;
+          fs.writeFileSync('ai-metrics.json', JSON.stringify(metrics, null, 2) + '\n');
+          console.log('Updated:', JSON.stringify({ commits, loc, lastUpdated: today }));
+          JSEOF
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "bilalahamad-bot"
+          git config user.email "bilal.ahamad@gmail.com"
+          git add ai-metrics.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: weekly AI metrics update [skip actions]"
+            git push origin HEAD
+          else
+            echo "No changes to commit"
+          fi
