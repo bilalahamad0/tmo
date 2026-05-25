@@ -22,5 +22,7 @@
   "impact": "Zero-touch monthly billing cycle",
   "cycle": "~3 days",
   "beforeAI": "Manual Python script, ran per request",
-  "afterAI": "Event-driven E2E billing automation"
+  "afterAI": "Event-driven E2E billing automation",
+  "tests": 174,
+  "testSuites": 10
 }
