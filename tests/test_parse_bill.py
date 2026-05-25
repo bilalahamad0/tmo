@@ -151,3 +151,95 @@ def test_extract_plan_total_skips_unreasonable_values():
     plan subtotal); should be rejected so we fall back to computed total."""
     lines = ["Plan $5.00"]
     assert app._extract_plan_total(lines) is None
+
+
+# --------------------------------------------------------------------------
+# parse_bill edge cases - this function computes the dollar amount that gets
+# paid, so its failure and fallback branches get explicit coverage.
+# --------------------------------------------------------------------------
+
+def _parse_with(text, mapping, **env):
+    page = MagicMock()
+    page.extract_text.return_value = text
+    reader = MagicMock()
+    reader.pages = [page]
+    base_env = {"USER_MAPPING": json.dumps(mapping)}
+    base_env.update(env)
+    with patch.dict(os.environ, base_env, clear=False), patch(
+        "app.PdfReader", return_value=reader
+    ):
+        return app.parse_bill("/fake/path.pdf")
+
+
+def test_parse_bill_returns_none_on_invalid_mapping_json():
+    with patch.dict(os.environ, {"USER_MAPPING": "{not valid json"}, clear=False):
+        assert app.parse_bill("/fake/path.pdf") is None
+
+
+def test_parse_bill_returns_none_when_no_line_items():
+    result = _parse_with(
+        "April, 2026\nAccount $20.00\nSummary of charges\n",
+        {"Alice(1234567890)": "Alice"},
+    )
+    assert result is None
+
+
+def test_parse_bill_skips_credits_and_adjustments_line():
+    result = _parse_with(
+        "April, 2026\nAccount $20.00\n"
+        "Credits & adjustments applied (see details)\n"
+        "Alice (1234567890) Talk $30.00\n",
+        {"Alice(1234567890)": "Alice"},
+    )
+    assert result is not None
+    assert len(result["structured_summary"]) == 1
+    assert result["structured_summary"][0]["name"] == "Alice"
+
+
+def test_parse_bill_tolerates_nonnumeric_account_charge():
+    """A malformed 'Account $abc' must not crash; base charge falls back to 0."""
+    result = _parse_with(
+        "April, 2026\nAccount $abc\nAlice (1234567890) Talk $30.00\n",
+        {"Alice(1234567890)": "Alice"},
+    )
+    assert result is not None
+    assert abs(result["total_amount"] - 30.0) < 0.01
+
+
+def test_parse_bill_tolerates_unparseable_line_amount():
+    result = _parse_with(
+        "April, 2026\nAccount $20.00\n"
+        "(0000000000) Ghost entry text\n"
+        "Bob (0987654321) Talk $40.00\n",
+        {"Bob(0987654321)": "Bob"},
+    )
+    assert result is not None
+    names = [m["name"] for m in result["structured_summary"]]
+    assert names == ["Bob"]
+
+
+def test_parse_bill_uses_plan_subtotal_when_present():
+    result = _parse_with(
+        "April, 2026\nPlan $150.00\nAccount $20.00\n"
+        "Alice (1234567890) Talk $30.00\nBob (0987654321) Talk $40.00\n",
+        {"Alice(1234567890)": "Alice", "Bob(0987654321)": "Bob"},
+    )
+    assert result is not None
+    # Computed split total is 90; plan subtotal is the parsed 150.
+    assert result["total_bill"] == "90.00"
+    assert result["plan_total"] == "150.00"
+
+
+def test_parse_bill_returns_none_when_reader_raises():
+    mapping = json.dumps({"Alice(1234567890)": "Alice"})
+    with patch.dict(os.environ, {"USER_MAPPING": mapping}, clear=False), patch(
+        "app.PdfReader", side_effect=Exception("corrupt pdf")
+    ):
+        assert app.parse_bill("/fake/path.pdf") is None
+
+
+def test_extract_month_name_skips_empty_first_segment():
+    """A leading ', 2026' line has an empty month segment - skip it rather than
+    emitting a bogus month, falling back to the current month."""
+    result = app._extract_month_name([", 2026", "no month here"])
+    assert "," in result
