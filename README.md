@@ -49,7 +49,8 @@ Each stage records its outcome to `~/.tmo_state/bill_<YYYY-MM>.json`. A re-run s
 | `security_utils.py` | macOS Keychain helpers for sensitive credentials |
 | `auto_process.sh` | Thin shell entrypoint invoked by the LaunchAgent |
 | `com.example.tmobile_automation.plist` | LaunchAgent template (sed-substituted at install) |
-| `tests/` | Unit tests for state, notify, parser, sms_utils, security |
+| `tests/` | Unit + feature tests (state, notify, parser, sms_utils, security, safety gate, pipeline orchestration) |
+| `pyproject.toml` | Pytest + coverage configuration (95% gate) |
 
 ---
 
@@ -239,12 +240,24 @@ Located at `~/.tmo_state/bill_<YYYY-MM>.json`. Stage progression:
 ## Tests
 
 ```bash
-./tmobile_env/bin/python -m pytest tests/ -v
+# Full suite + coverage gate (pytest config lives in pyproject.toml)
+./tmobile_env/bin/python -m pytest
+
+# Without the coverage gate, verbose
+./tmobile_env/bin/python -m pytest -v --no-cov
 ```
 
-Coverage: state I/O (atomic writes, idempotency), notify (SMTP mocked, all email types), parser (page-shift resilience, month/abbreviation detection, plan-total extraction), sms_utils (chat.db parsing, OTP regex, T-Mobile bill regex, attributedBody decoding), security_utils (Keychain mocked).
+Pytest and coverage are configured in `pyproject.toml`: a bare `pytest` runs every test, prints a `term-missing` coverage report, and **fails if total coverage drops below 95%** (currently ~97% on the gated modules). CI runs the same command on every push/PR to `main` (`.github/workflows/tests.yml`).
 
-Live Zelle/download stay out of the test suite — unsafe to mock against real banking and unrealistic against real T-Mobile.
+**Unit tests** (pure logic, no I/O):
+- `_zelle_safety_gate` — the money-protection gate: amount cap (env/Keychain/default/invalid), zero/negative guard, recipient-required, and the two idempotency locks (`zelle_confirmed_at` is never bypassable, even by `--force`).
+- `parse_bill` / parser helpers — page-shift resilience, month/abbreviation detection, plan-total extraction, plus malformed-input fallbacks (bad mapping JSON, non-numeric charges, unparseable lines, corrupt PDF).
+- `_trigger_zelle` — parsing the JSON result emitted by `zelle_pay.py`, including noise/invalid-line skipping and non-zero-exit handling.
+- `state` I/O (atomic writes, idempotency), `notify` (SMTP mocked, all email types + recipient routing), `sms_utils` (chat.db parsing against a real temp SQLite DB, OTP/bill regexes, attributedBody decoding, FDA error paths), `security_utils` (Keychain mocked), and `zelle_pay` / `download_bill` pure helpers (confirmation/review regexes, overlay-button matchers, content hashing, live-send flag).
+
+**Feature tests** (`tests/test_app_pipeline.py`) drive the whole `app._run_pipeline` / `main` orchestration end-to-end with every dangerous boundary stubbed (no browser, SMTP, Keychain, chat.db, or subprocess): Stage-0 SMS gating, dry-run vs. live-send paths, idempotent refusal after a confirmed payment, amount-over-cap aborts, per-stage failure-alert routing, PDF reuse from state, and `--force` semantics — asserting both exit codes and the resulting state file.
+
+Live Zelle/download browser flows stay out of the suite — unsafe to mock against real banking and unrealistic against real T-Mobile — so `zelle_pay.py` and `download_bill.py` are excluded from the coverage gate (their pure helpers are still tested).
 
 ---
 
