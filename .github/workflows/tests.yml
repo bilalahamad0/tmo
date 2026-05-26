@@ -28,6 +28,6 @@ jobs:
       # The suite never launches a browser, reaches the network, or touches the
       # macOS Keychain / Messages DB (all mocked), so it runs on Linux without
       # `playwright install`. pytest config (addopts + coverage gate) lives in
-      # pyproject.toml, so a bare `pytest` enforces the >=90% coverage floor.
+      # pyproject.toml, so a bare `pytest` enforces the >=95% coverage floor.
       - name: Run tests with coverage gate
         run: pytest

@@ -1,5 +1,13 @@
 # T-Mobile Bill → Zelle End-to-End Automation
 
+[![Tests](https://img.shields.io/github/actions/workflow/status/bilalahamad0/tmo/tests.yml?branch=main&label=tests&logo=github)](https://github.com/bilalahamad0/tmo/actions/workflows/tests.yml)
+[![CodeQL](https://img.shields.io/github/actions/workflow/status/bilalahamad0/tmo/codeql.yml?branch=main&label=CodeQL&logo=github)](https://github.com/bilalahamad0/tmo/actions/workflows/codeql.yml)
+[![Python](https://img.shields.io/badge/python-3.13-blue?logo=python&logoColor=white)](https://www.python.org/)
+![Coverage](https://img.shields.io/badge/coverage-%E2%89%A595%25-brightgreen)
+![Platform](https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple&logoColor=white)
+![Playwright](https://img.shields.io/badge/Playwright-2EAD33?logo=playwright&logoColor=white)
+[![License](https://img.shields.io/badge/license-personal%20use-lightgrey)](#license--disclaimer)
+
 Hands-off monthly handler for the T-Mobile bill on macOS:
 
 - Detects the new bill via T-Mobile's "Your bill is ready" SMS (read from Messages chat.db)
@@ -51,6 +59,8 @@ Each stage records its outcome to `~/.tmo_state/bill_<YYYY-MM>.json`. A re-run s
 | `com.example.tmobile_automation.plist` | LaunchAgent template (sed-substituted at install) |
 | `tests/` | Unit + feature tests (state, notify, parser, sms_utils, security, safety gate, pipeline orchestration) |
 | `pyproject.toml` | Pytest + coverage configuration (95% gate) |
+| `CLAUDE.md` | Architecture guide + gotchas for AI coding agents working in this repo |
+| `.github/workflows/` | CI: `tests.yml` (pytest + coverage gate), `codeql.yml` (security scan), `update-ai-metrics.yml` |
 
 ---
 
