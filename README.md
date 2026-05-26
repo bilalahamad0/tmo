@@ -6,7 +6,7 @@
 ![Coverage](https://img.shields.io/badge/coverage-%E2%89%A595%25-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple&logoColor=white)
 ![Playwright](https://img.shields.io/badge/Playwright-2EAD33?logo=playwright&logoColor=white)
-[![License](https://img.shields.io/badge/license-personal%20use-lightgrey)](#license--disclaimer)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Hands-off monthly handler for the T-Mobile bill on macOS:
 
@@ -335,6 +335,8 @@ All `*.png` and `*.log` are gitignored.
 ---
 
 ## License & disclaimer
+
+Released under the [MIT License](LICENSE).
 
 This is personal automation for a personal T-Mobile bill paid via personal Bank of America Zelle. It's published as a reference for similar automations — adapt at your own risk.
 
