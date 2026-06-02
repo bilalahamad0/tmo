@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>T-Mobile → Zelle Automation · Architecture & Workflow</title>
+<style>
+  /* ============================ THEME ============================ */
+  :root{
+    --bg:#070b15;
+    --bg2:#0b1120;
+    --surface:rgba(20,28,46,.72);
+    --surface-2:rgba(28,38,60,.6);
+    --border:rgba(120,140,180,.16);
+    --border-strong:rgba(140,160,200,.30);
+    --txt:#e8edf6;
+    --muted:#93a0b8;
+    --faint:#64748b;
+    --magenta:#E20074;
+    --magenta-soft:#ff3da3;
+    --cyan:#22d3ee;
+    --green:#34d399;
+    --amber:#f8b14b;
+    --red:#fb6f6f;
+    --violet:#a78bfa;
+    --r:18px;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;font-family:var(--sans);color:var(--txt);
+    background:var(--bg);overflow-x:hidden;line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  /* animated background mesh */
+  .bg-mesh{position:fixed;inset:0;z-index:-2;background:
+      radial-gradient(900px 600px at 12% -5%, rgba(226,0,116,.20), transparent 60%),
+      radial-gradient(800px 600px at 92% 8%, rgba(34,211,238,.14), transparent 55%),
+      radial-gradient(900px 700px at 50% 110%, rgba(167,139,250,.16), transparent 60%),
+      linear-gradient(180deg,var(--bg),var(--bg2));
+  }
+  .bg-grid{position:fixed;inset:0;z-index:-1;opacity:.35;
+    background-image:linear-gradient(rgba(120,140,180,.06) 1px,transparent 1px),
+                     linear-gradient(90deg,rgba(120,140,180,.06) 1px,transparent 1px);
+    background-size:46px 46px;
+    mask-image:radial-gradient(circle at 50% 30%,#000 0%,transparent 78%);
+    -webkit-mask-image:radial-gradient(circle at 50% 30%,#000 0%,transparent 78%);
+    animation:drift 30s linear infinite;
+  }
+  @keyframes drift{to{background-position:46px 46px,46px 46px}}
+
+  .wrap{max-width:1180px;margin:0 auto;padding:0 24px}
+
+  /* ============================ NAV ============================ */
+  nav{position:sticky;top:0;z-index:50;backdrop-filter:blur(14px);
+    background:rgba(7,11,21,.74);border-bottom:1px solid var(--border)}
+  nav .wrap{display:flex;align-items:center;gap:8px;height:62px}
+  .brand{display:flex;align-items:center;gap:11px;font-weight:700;letter-spacing:-.2px;margin-right:auto}
+  .brand .dot{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;
+    background:linear-gradient(135deg,var(--magenta),#7a0040);box-shadow:0 0 18px rgba(226,0,116,.6);
+    font-size:15px;color:#fff;font-weight:800}
+  .brand small{display:block;font-weight:500;color:var(--faint);font-size:11px;letter-spacing:.3px}
+  nav a.lnk{color:var(--muted);text-decoration:none;font-size:13.5px;font-weight:500;
+    padding:8px 13px;border-radius:9px;transition:.2s;white-space:nowrap}
+  nav a.lnk:hover{color:var(--txt);background:var(--surface-2)}
+  nav a.lnk.active{color:#fff;background:rgba(226,0,116,.16);box-shadow:inset 0 0 0 1px rgba(226,0,116,.4)}
+  .navtoggle{display:none}
+  @media(max-width:880px){
+    .navlinks{display:none}
+  }
+
+  /* ============================ HERO ============================ */
+  header.hero{position:relative;padding:96px 0 60px;text-align:center}
+  .eyebrow{display:inline-flex;align-items:center;gap:9px;font-family:var(--mono);font-size:12px;
+    color:var(--cyan);background:rgba(34,211,238,.08);border:1px solid rgba(34,211,238,.25);
+    padding:7px 15px;border-radius:100px;letter-spacing:.5px;margin-bottom:26px}
+  .eyebrow .pulse{width:8px;height:8px;border-radius:50%;background:var(--green);
+    box-shadow:0 0 0 0 rgba(52,211,153,.7);animation:ring 2s infinite}
+  @keyframes ring{0%{box-shadow:0 0 0 0 rgba(52,211,153,.6)}70%{box-shadow:0 0 0 9px rgba(52,211,153,0)}100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}}
+  header.hero h1{font-size:clamp(34px,6vw,68px);line-height:1.03;margin:0 0 18px;font-weight:800;letter-spacing:-1.6px}
+  header.hero h1 .grad{background:linear-gradient(115deg,#fff 10%,var(--magenta-soft) 55%,var(--cyan));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  header.hero p.sub{max-width:680px;margin:0 auto;color:var(--muted);font-size:clamp(15px,2vw,18.5px)}
+  .hero-cta{margin-top:34px;display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+  .btn{font-family:var(--sans);font-size:14px;font-weight:600;padding:12px 22px;border-radius:11px;
+    text-decoration:none;cursor:pointer;border:1px solid transparent;transition:.2s;display:inline-flex;align-items:center;gap:9px}
+  .btn.primary{background:linear-gradient(135deg,var(--magenta),#a8005a);color:#fff;box-shadow:0 8px 26px rgba(226,0,116,.35)}
+  .btn.primary:hover{transform:translateY(-2px);box-shadow:0 12px 32px rgba(226,0,116,.5)}
+  .btn.ghost{background:var(--surface);color:var(--txt);border-color:var(--border-strong)}
+  .btn.ghost:hover{background:var(--surface-2);transform:translateY(-2px)}
+
+  .stats{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-top:58px}
+  .stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:22px 14px;
+    backdrop-filter:blur(8px);position:relative;overflow:hidden}
+  .stat::before{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(226,0,116,.08),transparent 60%);opacity:0;transition:.3s}
+  .stat:hover::before{opacity:1}
+  .stat .num{font-size:34px;font-weight:800;letter-spacing:-1px;background:linear-gradient(135deg,#fff,var(--magenta-soft));
+    -webkit-background-clip:text;background-clip:text;color:transparent;font-variant-numeric:tabular-nums}
+  .stat .lbl{font-size:11.5px;color:var(--muted);margin-top:5px;letter-spacing:.4px;text-transform:uppercase;font-weight:600}
+  @media(max-width:760px){.stats{grid-template-columns:repeat(2,1fr)}.stat:last-child{grid-column:span 2}}
+
+  /* ============================ SECTION ============================ */
+  section{padding:72px 0;position:relative}
+  .sec-head{margin-bottom:42px;max-width:760px}
+  .sec-tag{font-family:var(--mono);font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:var(--magenta-soft);font-weight:700}
+  .sec-head h2{font-size:clamp(26px,4vw,40px);margin:12px 0 12px;letter-spacing:-1px;font-weight:800}
+  .sec-head p{color:var(--muted);font-size:16px;margin:0}
+
+  .reveal{opacity:0;transform:translateY(26px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1)}
+  .reveal.in{opacity:1;transform:none}
+
+  /* ============================ WORKFLOW TIMELINE ============================ */
+  .flow-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:34px;
+    background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:12px 14px;backdrop-filter:blur(8px)}
+  .flow-controls .ctl{display:inline-flex;align-items:center;gap:8px;background:var(--surface-2);border:1px solid var(--border);
+    color:var(--txt);font-size:13px;font-weight:600;padding:9px 15px;border-radius:10px;cursor:pointer;transition:.2s;font-family:var(--sans)}
+  .flow-controls .ctl:hover{border-color:var(--border-strong);background:rgba(40,52,78,.7)}
+  .flow-controls .ctl.run{background:linear-gradient(135deg,var(--magenta),#9c0054);border-color:transparent;box-shadow:0 6px 18px rgba(226,0,116,.32)}
+  .flow-controls .spacer{margin-left:auto;color:var(--faint);font-size:12px;font-family:var(--mono)}
+  .flow-controls .speed{display:inline-flex;gap:4px;background:var(--surface-2);border-radius:10px;padding:4px;border:1px solid var(--border)}
+  .flow-controls .speed button{background:transparent;border:0;color:var(--muted);font-size:12px;font-weight:700;
+    padding:5px 10px;border-radius:7px;cursor:pointer;font-family:var(--mono)}
+  .flow-controls .speed button.on{background:var(--magenta);color:#fff}
+
+  .timeline{position:relative;padding-left:6px}
+  /* the spine */
+  .spine{position:absolute;left:31px;top:14px;bottom:14px;width:3px;border-radius:3px;
+    background:rgba(120,140,180,.16);overflow:visible}
+  .spine .fill{position:absolute;left:0;top:0;width:100%;height:0;border-radius:3px;
+    background:linear-gradient(180deg,var(--magenta),var(--cyan));
+    box-shadow:0 0 14px rgba(226,0,116,.6);transition:height .6s cubic-bezier(.45,.05,.3,1)}
+  .orb{position:absolute;left:50%;top:0;width:18px;height:18px;border-radius:50%;
+    transform:translate(-50%,-50%);background:radial-gradient(circle at 35% 30%,#fff,var(--magenta-soft));
+    box-shadow:0 0 0 5px rgba(226,0,116,.22),0 0 22px 5px rgba(226,0,116,.65);
+    transition:top .6s cubic-bezier(.45,.05,.3,1);z-index:5;opacity:0}
+  .orb.live{opacity:1}
+
+  .stage{position:relative;padding:0 0 26px 78px;min-height:64px}
+  .node{position:absolute;left:14px;top:6px;width:40px;height:40px;border-radius:12px;display:grid;place-items:center;
+    background:var(--surface);border:1px solid var(--border-strong);color:var(--muted);z-index:4;
+    transition:.45s cubic-bezier(.2,.7,.2,1)}
+  .node svg{width:20px;height:20px}
+  .node .ring{position:absolute;inset:-5px;border-radius:15px;border:2px solid transparent;transition:.4s}
+  .stage.active .node{background:linear-gradient(135deg,rgba(226,0,116,.25),rgba(20,28,46,.9));
+    border-color:var(--magenta);color:#fff;box-shadow:0 0 24px rgba(226,0,116,.5);transform:scale(1.08)}
+  .stage.active .node .ring{inset:-6px;border-color:rgba(226,0,116,.45);animation:ring2 1.4s ease-out}
+  @keyframes ring2{0%{inset:-2px;opacity:1}100%{inset:-14px;opacity:0}}
+  .stage.done .node{background:linear-gradient(135deg,rgba(52,211,153,.22),rgba(20,28,46,.9));border-color:var(--green);color:var(--green)}
+
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:18px 20px;
+    backdrop-filter:blur(8px);transition:.4s;cursor:pointer;position:relative;overflow:hidden}
+  .card::after{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:transparent;transition:.4s}
+  .stage.active .card{border-color:var(--border-strong);background:var(--surface-2);transform:translateX(4px)}
+  .stage.active .card::after{background:linear-gradient(180deg,var(--magenta),var(--cyan))}
+  .card:hover{border-color:var(--border-strong)}
+  .card .top{display:flex;align-items:center;gap:11px;flex-wrap:wrap}
+  .card .stg{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--magenta-soft);
+    background:rgba(226,0,116,.1);padding:3px 9px;border-radius:6px;border:1px solid rgba(226,0,116,.22)}
+  .card h3{font-size:17px;margin:0;font-weight:700;letter-spacing:-.3px}
+  .card .mod{font-family:var(--mono);font-size:11.5px;color:var(--cyan);margin-left:auto}
+  .card .desc{color:var(--muted);font-size:13.7px;margin:11px 0 0;max-width:62ch}
+  .chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:13px}
+  .chip{font-size:11px;font-family:var(--mono);padding:4px 9px;border-radius:7px;border:1px solid var(--border);
+    color:var(--muted);background:var(--surface-2);display:inline-flex;align-items:center;gap:5px}
+  .chip.ok{color:var(--green);border-color:rgba(52,211,153,.3);background:rgba(52,211,153,.07)}
+  .chip.exit{color:var(--cyan);border-color:rgba(34,211,238,.3);background:rgba(34,211,238,.07)}
+  .chip.warn{color:var(--amber);border-color:rgba(248,177,75,.3);background:rgba(248,177,75,.07)}
+  .chip.err{color:var(--red);border-color:rgba(251,111,111,.3);background:rgba(251,111,111,.07)}
+  .chip.state{color:var(--violet);border-color:rgba(167,139,250,.3);background:rgba(167,139,250,.07)}
+  .chip i{font-style:normal;opacity:.8}
+
+  /* ============================ ARCHITECTURE ============================ */
+  .arch{display:grid;grid-template-columns:1.1fr 1fr;gap:22px;align-items:start}
+  @media(max-width:900px){.arch{grid-template-columns:1fr}}
+  .orchestrator{background:linear-gradient(160deg,rgba(226,0,116,.16),var(--surface));
+    border:1px solid rgba(226,0,116,.35);border-radius:20px;padding:26px;position:relative;overflow:hidden}
+  .orchestrator::before{content:"";position:absolute;width:260px;height:260px;border-radius:50%;
+    background:radial-gradient(circle,rgba(226,0,116,.3),transparent 70%);top:-120px;right:-90px;animation:float 8s ease-in-out infinite}
+  @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(18px)}}
+  .orchestrator .ohead{display:flex;align-items:center;gap:13px;position:relative}
+  .orchestrator .oicon{width:50px;height:50px;border-radius:14px;display:grid;place-items:center;
+    background:linear-gradient(135deg,var(--magenta),#7a0040);box-shadow:0 0 26px rgba(226,0,116,.55)}
+  .orchestrator .oicon svg{width:26px;height:26px;color:#fff}
+  .orchestrator h3{margin:0;font-size:21px;font-weight:800;letter-spacing:-.4px}
+  .orchestrator .ohead .mono{font-family:var(--mono);font-size:12px;color:var(--magenta-soft)}
+  .orchestrator p{color:var(--muted);font-size:14px;margin:16px 0 0;position:relative}
+  .owns{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px;position:relative}
+  .owns span{font-size:11.5px;font-family:var(--mono);background:rgba(7,11,21,.5);border:1px solid var(--border-strong);
+    padding:6px 11px;border-radius:9px;color:var(--txt)}
+
+  .modgrid{display:grid;grid-template-columns:1fr 1fr;gap:13px}
+  @media(max-width:520px){.modgrid{grid-template-columns:1fr}}
+  .mod-card{background:var(--surface);border:1px solid var(--border);border-radius:15px;padding:16px;
+    transition:.3s;cursor:default;position:relative;overflow:hidden}
+  .mod-card:hover{transform:translateY(-4px);border-color:var(--accent,var(--border-strong));
+    box-shadow:0 14px 30px rgba(0,0,0,.35)}
+  .mod-card .mh{display:flex;align-items:center;gap:10px}
+  .mod-card .mi{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;flex:0 0 auto;
+    background:var(--surface-2);border:1px solid var(--border);transition:.3s}
+  .mod-card:hover .mi{background:color-mix(in srgb,var(--accent,var(--cyan)) 22%,transparent);border-color:var(--accent,var(--cyan))}
+  .mod-card .mi svg{width:19px;height:19px;color:var(--accent,var(--cyan))}
+  .mod-card .mname{font-family:var(--mono);font-size:13px;font-weight:700}
+  .mod-card .mrole{font-size:11px;color:var(--faint);margin-top:1px}
+  .mod-card .mdesc{font-size:12.5px;color:var(--muted);margin:11px 0 0;line-height:1.5}
+
+  /* ============================ SYSTEM DESIGN MAP ============================ */
+  .sysmap{position:relative;border:1px solid var(--border);border-radius:22px;padding:26px;
+    background:linear-gradient(180deg,rgba(11,17,32,.6),rgba(7,11,21,.4));overflow:hidden}
+  .sysmap .col-head{display:flex;align-items:center;gap:9px;font-family:var(--mono);font-size:11.5px;
+    text-transform:uppercase;letter-spacing:1px;font-weight:700;margin-bottom:14px}
+  .sys-cols{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:18px;align-items:stretch}
+  @media(max-width:940px){.sys-cols{grid-template-columns:1fr}}
+  .zone{border:1px dashed var(--border-strong);border-radius:16px;padding:16px;background:rgba(7,11,21,.35);height:100%}
+  .zone.local{border-color:rgba(34,211,238,.35);background:rgba(34,211,238,.04)}
+  .zone.engine{border-style:solid;border-color:rgba(226,0,116,.32);background:rgba(226,0,116,.05)}
+  .zone.ext{border-color:rgba(248,177,75,.32);background:rgba(248,177,75,.04)}
+  .node-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 13px;margin-bottom:11px;
+    display:flex;gap:11px;align-items:flex-start;transition:.3s;position:relative}
+  .node-box:last-child{margin-bottom:0}
+  .node-box:hover{border-color:var(--border-strong);transform:translateX(3px)}
+  .node-box .nb-ic{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;flex:0 0 auto;
+    background:var(--surface-2);border:1px solid var(--border)}
+  .node-box .nb-ic svg{width:17px;height:17px}
+  .node-box .nb-t{font-size:13px;font-weight:700}
+  .node-box .nb-d{font-size:11.3px;color:var(--muted);margin-top:2px;font-family:var(--mono)}
+  .badge{position:absolute;top:9px;right:10px;font-size:9px;font-family:var(--mono);font-weight:700;
+    padding:2px 6px;border-radius:5px;letter-spacing:.5px}
+  .badge.sec{background:rgba(52,211,153,.14);color:var(--green);border:1px solid rgba(52,211,153,.3)}
+  .badge.fda{background:rgba(248,177,75,.14);color:var(--amber);border:1px solid rgba(248,177,75,.3)}
+  .flow-legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:20px;padding-top:18px;border-top:1px solid var(--border);
+    font-size:12px;color:var(--muted)}
+  .flow-legend span{display:inline-flex;align-items:center;gap:7px}
+  .flow-legend .ln{width:22px;height:3px;border-radius:3px}
+
+  /* ============================ SECURITY ============================ */
+  .seccards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  @media(max-width:860px){.seccards{grid-template-columns:1fr}}
+  .sec-card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:22px;position:relative;overflow:hidden;transition:.3s}
+  .sec-card:hover{border-color:var(--border-strong);transform:translateY(-4px)}
+  .sec-card .glow{position:absolute;width:120px;height:120px;border-radius:50%;top:-50px;right:-40px;
+    background:radial-gradient(circle,var(--gc,rgba(52,211,153,.3)),transparent 70%);filter:blur(6px)}
+  .sec-card .si{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;position:relative;
+    background:var(--surface-2);border:1px solid var(--border-strong);margin-bottom:14px}
+  .sec-card .si svg{width:23px;height:23px}
+  .sec-card h4{margin:0 0 8px;font-size:16px;font-weight:700}
+  .sec-card p{margin:0;color:var(--muted);font-size:13.3px;line-height:1.55}
+  .sec-card code{font-family:var(--mono);font-size:12px;background:rgba(7,11,21,.6);padding:2px 6px;border-radius:5px;color:var(--cyan)}
+
+  .gate-flow{margin-top:22px;background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:22px;overflow-x:auto}
+  .gate-flow h4{margin:0 0 18px;font-size:15px;font-family:var(--mono);color:var(--amber);letter-spacing:.4px}
+  .gate-steps{display:flex;align-items:stretch;gap:0;min-width:680px}
+  .gate-step{flex:1;text-align:center;position:relative;padding:0 6px}
+  .gate-step .gbox{background:var(--surface-2);border:1px solid var(--border-strong);border-radius:12px;padding:14px 10px;height:100%;transition:.3s}
+  .gate-step:hover .gbox{border-color:var(--amber);background:rgba(248,177,75,.08)}
+  .gate-step .gq{font-size:12.5px;font-weight:700;margin-bottom:6px}
+  .gate-step .ga{font-size:10.5px;font-family:var(--mono);color:var(--red)}
+  .gate-step:not(:last-child)::after{content:"→";position:absolute;right:-7px;top:50%;transform:translateY(-50%);color:var(--amber);font-weight:800;z-index:2}
+  .gate-pass{text-align:center;margin-top:16px;font-family:var(--mono);font-size:13px;color:var(--green);font-weight:700}
+
+  /* ============================ SCHEDULE ============================ */
+  .sched{display:grid;grid-template-columns:1.3fr 1fr;gap:22px;align-items:center}
+  @media(max-width:820px){.sched{grid-template-columns:1fr}}
+  .cal{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:24px}
+  .cal .cm{font-family:var(--mono);color:var(--muted);font-size:13px;margin-bottom:16px;display:flex;justify-content:space-between}
+  .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:7px}
+  .cal-grid .dow{font-size:10px;color:var(--faint);text-align:center;font-weight:700;font-family:var(--mono);padding-bottom:4px}
+  .day{aspect-ratio:1;border-radius:10px;display:grid;place-items:center;font-size:13px;font-weight:600;
+    background:var(--surface-2);border:1px solid var(--border);color:var(--muted)}
+  .day.fire{background:linear-gradient(135deg,rgba(226,0,116,.3),rgba(20,28,46,.8));border-color:var(--magenta);
+    color:#fff;position:relative;box-shadow:0 0 16px rgba(226,0,116,.3)}
+  .day.fire::after{content:"";position:absolute;inset:0;border-radius:10px;border:2px solid var(--magenta);
+    animation:firepulse 2.4s ease-out infinite}
+  .day.fire:nth-child(16)::after{animation-delay:0s}
+  .day.fire:nth-child(17)::after{animation-delay:.4s}
+  .day.fire:nth-child(18)::after{animation-delay:.8s}
+  .day.fire:nth-child(19)::after{animation-delay:1.2s}
+  .day.fire:nth-child(20)::after{animation-delay:1.6s}
+  @keyframes firepulse{0%{opacity:.9;transform:scale(1)}100%{opacity:0;transform:scale(1.5)}}
+  .day.empty{background:transparent;border:0}
+  .sched-info .si-row{display:flex;gap:13px;align-items:flex-start;padding:15px 0;border-bottom:1px solid var(--border)}
+  .sched-info .si-row:last-child{border:0}
+  .sched-info .si-ic{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;flex:0 0 auto;
+    background:var(--surface);border:1px solid var(--border-strong)}
+  .sched-info .si-ic svg{width:19px;height:19px;color:var(--cyan)}
+  .sched-info h4{margin:0 0 3px;font-size:14.5px}
+  .sched-info p{margin:0;font-size:12.8px;color:var(--muted)}
+  .sched-info code{font-family:var(--mono);font-size:11.5px;color:var(--magenta-soft);background:rgba(226,0,116,.08);padding:1px 5px;border-radius:4px}
+
+  /* ============================ FOOTER ============================ */
+  footer{padding:50px 0 70px;border-top:1px solid var(--border);margin-top:40px;text-align:center}
+  footer .f-mono{font-family:var(--mono);font-size:12.5px;color:var(--faint)}
+  footer .f-stack{display:flex;gap:9px;justify-content:center;flex-wrap:wrap;margin:20px 0}
+  footer .f-stack span{font-family:var(--mono);font-size:11.5px;padding:6px 12px;border-radius:8px;
+    background:var(--surface);border:1px solid var(--border);color:var(--muted)}
+
+  ::selection{background:rgba(226,0,116,.4);color:#fff}
+  /* scrollbar */
+  ::-webkit-scrollbar{height:10px;width:10px}
+  ::-webkit-scrollbar-thumb{background:rgba(120,140,180,.25);border-radius:10px}
+  ::-webkit-scrollbar-track{background:transparent}
+</style>
+</head>
+<body>
+<div class="bg-mesh"></div>
+<div class="bg-grid"></div>
+
+<!-- ===================== NAV ===================== -->
+<nav>
+  <div class="wrap">
+    <div class="brand">
+      <span class="dot">T</span>
+      <span>tmo&nbsp;automation<small>SMS → bill → email → Zelle</small></span>
+    </div>
+    <div class="navlinks">
+      <a class="lnk" href="#workflow">Workflow</a>
+      <a class="lnk" href="#architecture">Architecture</a>
+      <a class="lnk" href="#system">System Design</a>
+      <a class="lnk" href="#security">Security</a>
+      <a class="lnk" href="#schedule">Schedule</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ===================== HERO ===================== -->
+<header class="hero">
+  <div class="wrap">
+    <span class="eyebrow"><span class="pulse"></span> HANDS-OFF macOS PIPELINE · RUNS UNATTENDED</span>
+    <h1>From a billing&nbsp;text<br>to a paid bill — <span class="grad">zero clicks</span></h1>
+    <p class="sub">An autonomous pipeline that reacts to a T-Mobile billing SMS, scrapes the bill PDF, parses
+      per-line charges, emails a styled summary, and pays the shared pool over Bank&nbsp;of&nbsp;America Zelle —
+      all gated behind hard safety locks and idempotent state.</p>
+    <div class="hero-cta">
+      <a class="btn primary" href="#workflow" id="playJump">▶ &nbsp;Run the pipeline</a>
+      <a class="btn ghost" href="#architecture">Explore the architecture</a>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="num" data-to="8">0</div><div class="lbl">Pipeline Stages</div></div>
+      <div class="stat"><div class="num" data-to="7">0</div><div class="lbl">Python Modules</div></div>
+      <div class="stat"><div class="num" data-to="3">0</div><div class="lbl">External Services</div></div>
+      <div class="stat"><div class="num" data-to="2260" data-suffix="">0</div><div class="lbl">Lines of Code</div></div>
+      <div class="stat"><div class="num" data-to="1">0</div><div class="lbl">Hard Re-Pay Lock</div></div>
+    </div>
+  </div>
+</header>
+
+<!-- ===================== WORKFLOW ===================== -->
+<section id="workflow">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="sec-tag">The Workflow</span>
+      <h2>Eight stages, one orchestrator</h2>
+      <p>Every run is the same idempotent march through 8 stages, all driven by <code style="font-family:var(--mono);color:var(--cyan)">app.py::_run_pipeline()</code>.
+        State at <span style="font-family:var(--mono);color:var(--violet);font-size:13px">~/.tmo_state/bill_&lt;YYYY-MM&gt;.json</span> decides what's already done. Press play and watch the flow.</p>
+    </div>
+
+    <div class="flow-controls reveal">
+      <button class="ctl run" id="btnPlay">▶ &nbsp;Play</button>
+      <button class="ctl" id="btnReset">↻ &nbsp;Reset</button>
+      <div class="speed">
+        <button data-sp="1600">0.5×</button>
+        <button data-sp="900" class="on">1×</button>
+        <button data-sp="450">2×</button>
+      </div>
+      <span class="spacer" id="flowStatus">idle · press play</span>
+    </div>
+
+    <div class="timeline reveal" id="timeline">
+      <div class="spine"><div class="fill" id="spineFill"></div></div>
+      <div class="orb" id="orb"></div>
+      <!-- stages injected by JS -->
+    </div>
+  </div>
+</section>
+
+<!-- ===================== ARCHITECTURE ===================== -->
+<section id="architecture">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="sec-tag">The Architecture</span>
+      <h2>A hub-and-spoke of single-purpose modules</h2>
+      <p><code style="font-family:var(--mono);color:var(--magenta-soft)">app.py</code> is the only entrypoint that touches every subsystem. Each spoke owns exactly one concern — and the two browser-driving spokes are deliberately kept in separate sessions.</p>
+    </div>
+
+    <div class="arch">
+      <div class="orchestrator reveal">
+        <div class="ohead">
+          <div class="oicon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></svg></div>
+          <div>
+            <h3>app.py</h3>
+            <span class="mono">stage-aware orchestrator</span>
+          </div>
+        </div>
+        <p>Owns the PDF parser, the Zelle safety gate, and the per-stage idempotency logic. Spawns <code style="font-family:var(--mono);color:var(--cyan);font-size:13px">zelle_pay.py</code> as a <b>subprocess</b> so the Bank&nbsp;of&nbsp;America browser session is fully isolated from the T-Mobile one. Any uncaught failure routes to a failure-alert email and a non-zero exit.</p>
+        <div class="owns">
+          <span>parse_bill()</span>
+          <span>_zelle_safety_gate()</span>
+          <span>_trigger_zelle() · subprocess</span>
+          <span>_run_pipeline()</span>
+        </div>
+      </div>
+
+      <div class="modgrid">
+        <!-- module cards injected by JS -->
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== SYSTEM DESIGN ===================== -->
+<section id="system">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="sec-tag">System Design</span>
+      <h2>Everything secret stays on the machine</h2>
+      <p>Credentials, session cookies, and transaction state never leave the Mac. Three external services are touched; everything else — Keychain, state, browser profile, the SMS database — is local and locked down.</p>
+    </div>
+
+    <div class="sysmap reveal">
+      <div class="sys-cols">
+        <!-- LOCAL DATA -->
+        <div class="zone local">
+          <div class="col-head" style="color:var(--cyan)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg> LOCAL · ON-DEVICE</div>
+          <div class="node-box"><div class="nb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--amber)" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+            <div><div class="nb-t">Messages chat.db</div><div class="nb-d">~/Library/Messages</div></div><span class="badge fda">FDA</span></div>
+          <div class="node-box"><div class="nb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+            <div><div class="nb-t">macOS Keychain</div><div class="nb-d">TMobile_*, BoA_*, ZELLE_*</div></div><span class="badge sec">SECRET</span></div>
+          <div class="node-box"><div class="nb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--violet)" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/></svg></div>
+            <div><div class="nb-t">Per-bill state JSON</div><div class="nb-d">~/.tmo_state · 0600 · atomic</div></div><span class="badge sec">0600</span></div>
+          <div class="node-box"><div class="nb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--cyan)" stroke-width="2"><path d="M15.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6.5z"/><path d="M14 2v6h6"/></svg></div>
+            <div><div class="nb-t">Browser profile</div><div class="nb-d">~/.tmo_browser_profile</div></div><span class="badge sec">COOKIES</span></div>
+          <div class="node-box"><div class="nb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13l2 2 4-4"/></svg></div>
+            <div><div class="nb-t">Bill PDF</div><div class="nb-d">~/Downloads · sha256</div></div></div>
+        </div>
+
+        <!-- ENGINE -->
+        <div class="zone engine">
+          <div class="col-head" style="color:var(--magenta-soft)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.2 4.2l2.8 2.8M17 17l2.8 2.8M1 12h4M19 12h4M4.2 19.8l2.8-2.8M17 7l2.8-2.8"/></svg> ENGINE · PYTHON + PLAYWRIGHT</div>
+          <div class="node-box" style="border-color:rgba(226,0,116,.4)"><div class="nb-ic" style="border-color:var(--magenta)"><svg viewBox="0 0 24 24" fill="none" stroke="var(--magenta-soft)" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg></div>
+            <div><div class="nb-t">app.py orchestrator</div><div class="nb-d">8-stage state machine</div></div></div>
+          <div class="node-box"><div class="nb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--cyan)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20"/></svg></div>
+            <div><div class="nb-t">download_bill.py</div><div class="nb-d">T-Mobile · stealth</div></div></div>
+          <div class="node-box"><div class="nb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><path d="M3 21h18M5 21V10l7-5 7 5v11M9 21v-6h6v6"/></svg></div>
+            <div><div class="nb-t">zelle_pay.py</div><div class="nb-d">BoA · isolated subprocess</div></div></div>
+          <div class="node-box"><div class="nb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--amber)" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+            <div><div class="nb-t">LaunchAgent</div><div class="nb-d">days 6–10 · 9 AM</div></div></div>
+        </div>
+
+        <!-- EXTERNAL -->
+        <div class="zone ext">
+          <div class="col-head" style="color:var(--amber)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20"/></svg> EXTERNAL · OVER TLS</div>
+          <div class="node-box"><div class="nb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--magenta-soft)" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 7l10 6 10-6"/></svg></div>
+            <div><div class="nb-t">T-Mobile portal</div><div class="nb-d">bill PDF + posted date</div></div></div>
+          <div class="node-box"><div class="nb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><path d="M3 21h18M5 21V10l7-5 7 5v11"/><path d="M12 21v-4"/></svg></div>
+            <div><div class="nb-t">Bank of America</div><div class="nb-d">Zelle multi-step flow</div></div></div>
+          <div class="node-box"><div class="nb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--cyan)" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 7l10 6 10-6"/></svg></div>
+            <div><div class="nb-t">Gmail SMTP/SSL</div><div class="nb-d">:465 · 4 email types</div></div></div>
+        </div>
+      </div>
+
+      <div class="flow-legend">
+        <span><span class="ln" style="background:var(--cyan)"></span> reads local secret</span>
+        <span><span class="ln" style="background:var(--magenta)"></span> drives a browser</span>
+        <span><span class="ln" style="background:var(--amber)"></span> network egress (TLS)</span>
+        <span><span class="ln" style="background:var(--violet)"></span> writes durable state</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== SECURITY ===================== -->
+<section id="security">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="sec-tag">Safety &amp; Security Model</span>
+      <h2>It would rather do nothing than pay twice</h2>
+      <p>Money movement is fenced behind a default-dry-run flag, an amount cap, an exact recipient match, and a hard idempotency lock that even <code style="font-family:var(--mono);color:var(--cyan)">--force</code> cannot bypass.</p>
+    </div>
+
+    <div class="seccards reveal">
+      <div class="sec-card" style="--gc:rgba(251,111,111,.32)">
+        <div class="glow"></div>
+        <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+        <h4>Hard re-pay lock</h4>
+        <p><code>zelle_confirmed_at</code> in state is permanent. Once a payment confirms, the pipeline refuses to send again — <code>--force</code> won't override it. To truly reset you must <code>rm</code> the state file.</p>
+      </div>
+      <div class="sec-card" style="--gc:rgba(248,177,75,.32)">
+        <div class="glow"></div>
+        <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="var(--amber)" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6z"/></svg></div>
+        <h4>Dry-run by default</h4>
+        <p><code>ZELLE_LIVE_SEND=0</code> stops at BoA's Review screen and saves <code>zelle_review_dryrun.png</code>. Only <code>=1</code> ever clicks <b>Pay</b>. Dry-runs never write an <code>attempted</code> flag.</p>
+      </div>
+      <div class="sec-card" style="--gc:rgba(52,211,153,.32)">
+        <div class="glow"></div>
+        <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg></div>
+        <h4>Cap + exact recipient</h4>
+        <p>Amount is checked against <code>ZELLE_AMOUNT_CAP</code> (default $300). Recipient is matched by <b>exact accessible name</b> on the Pay button — never a fuzzy "Edit/Delete &lt;name&gt;" sibling.</p>
+      </div>
+      <div class="sec-card" style="--gc:rgba(167,139,250,.32)">
+        <div class="glow"></div>
+        <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="var(--violet)" stroke-width="2"><path d="M12 2l9 4v6c0 5-3.5 8-9 10-5.5-2-9-5-9-10V6z"/><path d="M9 12l2 2 4-4"/></svg></div>
+        <h4>Atomic, 0600 state</h4>
+        <p>State writes via tempfile + <code>os.replace()</code> so a crash mid-write never corrupts. Directory <code>0700</code>, file <code>0600</code> — it holds confirmation IDs and amounts.</p>
+      </div>
+      <div class="sec-card" style="--gc:rgba(34,211,238,.32)">
+        <div class="glow"></div>
+        <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="var(--cyan)" stroke-width="2"><circle cx="8" cy="8" r="5"/><path d="M11.5 11.5L21 21M16 16l-2 2M19 13l-2 2"/></svg></div>
+        <h4>Env-first, Keychain-second</h4>
+        <p>Secrets resolve from env vars, then macOS Keychain. No credential is hardcoded; phone last-4 for MFA selection is pulled from Keychain too. OTPs are read but never logged.</p>
+      </div>
+      <div class="sec-card" style="--gc:rgba(226,0,116,.32)">
+        <div class="glow"></div>
+        <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="var(--magenta-soft)" stroke-width="2"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg></div>
+        <h4>Session isolation</h4>
+        <p><code>zelle_pay.py</code> runs as a separate subprocess, so the BoA browser context never shares memory or cookies with the live T-Mobile session in the parent.</p>
+      </div>
+    </div>
+
+    <div class="gate-flow reveal">
+      <h4>⛔ &nbsp;_zelle_safety_gate() — every check must pass before a cent moves</h4>
+      <div class="gate-steps">
+        <div class="gate-step"><div class="gbox"><div class="gq">Already confirmed?</div><div class="ga">→ refuse (hard lock)</div></div></div>
+        <div class="gate-step"><div class="gbox"><div class="gq">Attempted, unconfirmed?</div><div class="ga">→ refuse w/o --force</div></div></div>
+        <div class="gate-step"><div class="gbox"><div class="gq">Amount &gt; 0?</div><div class="ga">→ nothing to pay</div></div></div>
+        <div class="gate-step"><div class="gbox"><div class="gq">Amount ≤ cap?</div><div class="ga">→ manual review</div></div></div>
+        <div class="gate-step"><div class="gbox"><div class="gq">Recipient set?</div><div class="ga">→ refuse</div></div></div>
+      </div>
+      <div class="gate-pass">✓ all clear → Stage 6 Zelle send</div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== SCHEDULE ===================== -->
+<section id="schedule">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="sec-tag">Scheduling</span>
+      <h2>Wakes itself five mornings a month</h2>
+      <p>A macOS LaunchAgent fires <code style="font-family:var(--mono);color:var(--cyan)">auto_process.sh</code> at 9&nbsp;AM on days 6–10. Because the run is fully idempotent, firing five times is safe — it exits early the moment the work is already done.</p>
+    </div>
+
+    <div class="sched reveal">
+      <div class="cal">
+        <div class="cm"><span>Billing window</span><span>days 6 – 10 · 09:00</span></div>
+        <div class="cal-grid" id="calGrid"></div>
+      </div>
+      <div class="sched-info">
+        <div class="si-row">
+          <div class="si-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+          <div><h4>StartCalendarInterval × 5</h4><p>Five dict entries in the plist, one per day. Each retriggers the same orchestrator.</p></div>
+        </div>
+        <div class="si-row">
+          <div class="si-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg></div>
+          <div><h4>Won't wake the Mac alone</h4><p>Pair with <code>pmset repeat wakeorpoweron MTWRFSU 08:55:00</code> so the machine is awake before launchd fires.</p></div>
+        </div>
+        <div class="si-row">
+          <div class="si-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v6h6M20 20v-6h-6"/><path d="M20 8a8 8 0 0 0-14-3M4 16a8 8 0 0 0 14 3"/></svg></div>
+          <div><h4>Safe to re-run</h4><p>Exits clean if no SMS in 14 days, the bill isn't new, or it was already paid — no wasted MFA pushes.</p></div>
+        </div>
+        <div class="si-row">
+          <div class="si-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8"/></svg></div>
+          <div><h4>Needs Full Disk Access</h4><p>Granted to <code>/sbin/launchd</code> (scheduled) or <code>Terminal.app</code> (manual) so it can read <code>chat.db</code>.</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== FOOTER ===================== -->
+<footer>
+  <div class="wrap">
+    <div class="f-mono">app.py · download_bill.py · zelle_pay.py · notify.py · sms_utils.py · security_utils.py · state.py</div>
+    <div class="f-stack">
+      <span>Python 3</span><span>Playwright</span><span>playwright-stealth</span><span>pypdf</span>
+      <span>sqlite3</span><span>smtplib</span><span>macOS Keychain</span><span>LaunchAgent</span>
+    </div>
+    <div class="f-mono" style="opacity:.6">Architecture &amp; workflow visualization · generated from the live codebase</div>
+  </div>
+</footer>
+
+<script>
+/* ============================================================
+   DATA MODEL  (mirrors app.py::_run_pipeline)
+   ============================================================ */
+const ICONS = {
+  sms:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+  dl:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>',
+  parse:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h6M8 17h4"/></svg>',
+  mail:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 7l10 6 10-6"/></svg>',
+  shield:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6z"/></svg>',
+  bank:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V10l7-5 7 5v11M9 21v-6h6v6"/></svg>',
+  check:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-5"/></svg>',
+};
+const STAGES = [
+  { n:'0', icon:'sms', title:'SMS Gate', mod:'sms_utils.find_tmobile_bill_sms()',
+    desc:'Reads ~/Library/Messages/chat.db directly via sqlite3 and looks for a T-Mobile "your bill is ready" SMS in the last 14 days. On Big Sur+ the body often lives in a binary attributedBody blob — the longest printable-ASCII run is extracted as the message text.',
+    chips:[['ok','SMS found → continue'],['exit','no SMS in 14d → exit clean, no MFA'],['exit','already paid → exit'],['state','writes bill_sms_date · balance']]},
+  { n:'1+2', icon:'dl', title:'Detect &amp; Download PDF', mod:'download_bill.download_tmobile_bill()',
+    desc:'Playwright + playwright-stealth drive the T-Mobile portal from a persistent profile so the "trust this device" cookie skips 2FA for ~30 days. Dismisses OneTrust, the Privacy notice, and the MoEngage popup, reads the posted date, and downloads the summary PDF.',
+    chips:[['ok','new bill → save PDF + sha256'],['exit','posted date matches → not_new → exit'],['warn','push 2FA → email alert, wait'],['err','login/nav/download fail → alert · exit 2'],['state','writes bill_posted_date · pdf_path · pdf_sha256']]},
+  { n:'3', icon:'parse', title:'Parse the Bill', mod:'app.parse_bill()',
+    desc:'pypdf walks every page (resilient to page shifts) to pull the month, the "Plan" subtotal, and per-line charges. Base account charge is split across members, and lines whose name is in SPECIAL_POOL_NAMES are summed into the amount that will actually be paid.',
+    chips:[['ok','parsed → bill_data'],['err','unparseable → failure alert · exit 3'],['state','writes parsed_total · special_amount']]},
+  { n:'4', icon:'mail', title:'Bill Summary Email', mod:'notify.send_bill_summary_email()',
+    desc:'Composes a styled responsive HTML statement (T-Mobile magenta, per-line table, "Action Required" pool callout) with a plain-text alternative, attaches the original PDF, and sends over Gmail SMTP/SSL. Sends at most once per bill unless --force.',
+    chips:[['ok','sent → mark timestamp'],['exit','already emailed → skip (unless --force)'],['state','writes summary_emailed_at']]},
+  { n:'5', icon:'shield', title:'Zelle Safety Gate', mod:'app._zelle_safety_gate()',
+    desc:'The fence before any money moves. Refuses if already confirmed (hard lock), if a prior attempt is unconfirmed (needs --force), if the amount is ≤0 or above the cap, or if no recipient name is configured. A blocked gate with money owed fires a failure alert.',
+    chips:[['ok','all checks pass → continue'],['err','any check fails → block (+ alert)'],['warn','cap default $300']]},
+  { n:'6', icon:'bank', title:'Zelle Payment', mod:'zelle_pay.handle_boa_zelle() · subprocess',
+    desc:'Spawned as an isolated subprocess. Logs into BoA, auto-fills the OTP pulled from SMS, finds the recipient by exact accessible name, enters the amount + date, and advances to Review. ZELLE_LIVE_SEND=0 stops there with a screenshot; =1 clicks Pay and captures the confirmation #.',
+    chips:[['warn','dry-run → stop at Review + screenshot'],['ok','live → Pay → confirmation #'],['err','error → failure alert · exit 6'],['state','writes zelle_attempted_at → zelle_confirmed_at · id']]},
+  { n:'7', icon:'check', title:'Confirm or Alert', mod:'notify.send_confirmation_email()',
+    desc:'On success, emails a clean confirmation (amount, recipient, txn ID, month) — deliberately without the BoA screenshot so no account UI ever leaves the machine. Any failure anywhere in the pipeline routes to send_failure_alert() with logs + screenshots attached.',
+    chips:[['ok','success → confirmation email'],['err','any stage failure → failure alert'],['exit','done · exit 0']]},
+];
+
+const MODULES = [
+  { ic:'dl', name:'download_bill.py', role:'T-Mobile portal', col:'var(--cyan)',
+    d:'Playwright + stealth on a persistent profile. _dismiss_overlays() clears OneTrust, Privacy & MoEngage. Returns posted_date, pdf_path, pdf_sha256, or a not_new short-circuit.' },
+  { ic:'bank', name:'zelle_pay.py', role:'BoA Zelle · subprocess', col:'var(--green)',
+    d:'Drives BoA\'s multi-step Zelle flow. Exact accessible-name recipient match, OTP auto-pull, date fill, advance-to-review. Emits a JSON result line for the orchestrator to parse.' },
+  { ic:'mail', name:'notify.py', role:'4 email types', col:'var(--magenta-soft)',
+    d:'SMTP/SSL helpers: bill summary (HTML + PDF), Zelle confirmation, failure alert (logs/shots), and the T-Mobile 2FA push prompt. Confirmation screenshots stay local.' },
+  { ic:'sms', name:'sms_utils.py', role:'chat.db reader', col:'var(--amber)',
+    d:'Two consumers: 6-digit OTP for BoA MFA, and the T-Mobile bill-ready announcement. Decodes attributedBody blobs heuristically. Needs Full Disk Access.' },
+  { ic:'shield', name:'security_utils.py', role:'credential broker', col:'var(--violet)',
+    d:'Thin wrapper over security find-generic-password. Resolves env-var first, Keychain second — for both T-Mobile/BoA logins and the Zelle cap & recipient.' },
+  { ic:'parse', name:'state.py', role:'atomic state I/O', col:'var(--cyan)',
+    d:'Per-bill JSON at ~/.tmo_state. tempfile + os.replace() for crash-safe atomic writes, forced 0600. zelle_confirmed_at is the source of truth for "already paid".' },
+];
+
+/* ============================================================
+   BUILD WORKFLOW TIMELINE
+   ============================================================ */
+const timeline = document.getElementById('timeline');
+STAGES.forEach((s,i)=>{
+  const stage = document.createElement('div');
+  stage.className='stage'; stage.dataset.i=i;
+  stage.innerHTML = `
+    <div class="node">${ICONS[s.icon]}<span class="ring"></span></div>
+    <div class="card">
+      <div class="top">
+        <span class="stg">STAGE ${s.n}</span>
+        <h3>${s.title}</h3>
+        <span class="mod">${s.mod}</span>
+      </div>
+      <p class="desc">${s.desc}</p>
+      <div class="chips">${s.chips.map(c=>`<span class="chip ${c[0]}"><i>${
+        c[0]==='ok'?'✓':c[0]==='exit'?'⏏':c[0]==='warn'?'▲':c[0]==='err'?'✕':'◆'}</i>${c[1]}</span>`).join('')}</div>
+    </div>`;
+  timeline.appendChild(stage);
+});
+const stageEls = [...document.querySelectorAll('.stage')];
+
+/* ============================================================
+   BUILD MODULE CARDS
+   ============================================================ */
+const modgrid = document.querySelector('.modgrid');
+MODULES.forEach((m,i)=>{
+  const c = document.createElement('div');
+  c.className='mod-card reveal'; c.style.setProperty('--accent',m.col);
+  c.style.transitionDelay=(i*60)+'ms';
+  c.innerHTML = `
+    <div class="mh">
+      <div class="mi">${ICONS[m.ic]}</div>
+      <div><div class="mname">${m.name}</div><div class="mrole">${m.role}</div></div>
+    </div>
+    <p class="mdesc">${m.d}</p>`;
+  modgrid.appendChild(c);
+});
+
+/* ============================================================
+   WORKFLOW ANIMATION ENGINE
+   ============================================================ */
+const orb = document.getElementById('orb');
+const spineFill = document.getElementById('spineFill');
+const statusEl = document.getElementById('flowStatus');
+const btnPlay = document.getElementById('btnPlay');
+const btnReset = document.getElementById('btnReset');
+let speed = 900, running=false, idx=-1, timer=null;
+
+function nodeCenter(el){
+  const node = el.querySelector('.node');
+  const tlRect = timeline.getBoundingClientRect();
+  const nRect = node.getBoundingClientRect();
+  return (nRect.top - tlRect.top) + nRect.height/2;
+}
+function resetFlow(){
+  clearTimeout(timer); running=false; idx=-1;
+  stageEls.forEach(s=>s.classList.remove('active','done'));
+  orb.classList.remove('live');
+  spineFill.style.height='0px';
+  btnPlay.innerHTML='▶ &nbsp;Play';
+  statusEl.textContent='idle · press play';
+}
+function activate(i){
+  if(i>0) stageEls[i-1].classList.remove('active'), stageEls[i-1].classList.add('done');
+  const el = stageEls[i];
+  const y = nodeCenter(el);
+  orb.classList.add('live');
+  orb.style.top = y+'px';
+  spineFill.style.height = y+'px';
+  // activate after the orb has traveled
+  timer = setTimeout(()=>{
+    el.classList.add('active');
+    el.scrollIntoView({block:'center',behavior:'smooth'});
+    statusEl.textContent = `running · stage ${STAGES[i].n} — ${stripTags(STAGES[i].title)}`;
+    idx=i;
+    timer = setTimeout(()=>{
+      if(i < stageEls.length-1){ activate(i+1); }
+      else { finishFlow(); }
+    }, speed);
+  }, speed*0.65);
+}
+function finishFlow(){
+  stageEls[stageEls.length-1].classList.add('done');
+  running=false; btnPlay.innerHTML='▶ &nbsp;Replay';
+  statusEl.textContent='✓ complete · bill paid & confirmed';
+}
+function stripTags(s){const d=document.createElement('div');d.innerHTML=s;return d.textContent;}
+function play(){
+  if(running) return;
+  if(idx>=stageEls.length-1 || stageEls[stageEls.length-1].classList.contains('done')) resetFlow();
+  running=true; btnPlay.innerHTML='❚❚ &nbsp;Running';
+  activate(idx<0?0:idx);
+}
+btnPlay.addEventListener('click',()=>{ running?null:play(); });
+btnReset.addEventListener('click',resetFlow);
+document.querySelectorAll('.speed button').forEach(b=>{
+  b.addEventListener('click',()=>{
+    document.querySelectorAll('.speed button').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on'); speed=+b.dataset.sp;
+  });
+});
+// click a stage to focus it
+stageEls.forEach((el,i)=>el.querySelector('.card').addEventListener('click',()=>{
+  if(running) return;
+  stageEls.forEach(s=>s.classList.remove('active'));
+  for(let k=0;k<i;k++) stageEls[k].classList.add('done');
+  for(let k=i;k<stageEls.length;k++) stageEls[k].classList.remove('done');
+  el.classList.add('active'); idx=i;
+  orb.classList.add('live');
+  const y=nodeCenter(el); orb.style.top=y+'px'; spineFill.style.height=y+'px';
+}));
+// auto-play once the timeline scrolls into view
+let autoPlayed=false;
+const tlObs = new IntersectionObserver((es)=>{
+  es.forEach(e=>{ if(e.isIntersecting && !autoPlayed){ autoPlayed=true; setTimeout(play,500); } });
+},{threshold:.3});
+tlObs.observe(timeline);
+// hero "Run the pipeline" also kicks it
+document.getElementById('playJump').addEventListener('click',()=>setTimeout(()=>{autoPlayed=true;resetFlow();play();},700));
+window.addEventListener('resize',()=>{ if(idx>=0 && !running){ const y=nodeCenter(stageEls[idx]); orb.style.top=y+'px'; spineFill.style.height=y+'px'; }});
+
+/* ============================================================
+   SCROLL REVEAL
+   ============================================================ */
+const revObs = new IntersectionObserver((es)=>{
+  es.forEach(e=>{ if(e.isIntersecting){ e.target.classList.add('in'); revObs.unobserve(e.target);} });
+},{threshold:.12});
+document.querySelectorAll('.reveal').forEach(el=>revObs.observe(el));
+
+/* ============================================================
+   HERO COUNTERS
+   ============================================================ */
+function runCounter(el){
+  const to=+el.dataset.to, dur=1400, t0=performance.now();
+  (function step(now){
+    const p=Math.min(1,(now-t0)/dur), e=1-Math.pow(1-p,3);
+    el.textContent = Math.round(to*e).toLocaleString();
+    if(p<1) requestAnimationFrame(step);
+  })(t0);
+}
+const cObs=new IntersectionObserver((es)=>{es.forEach(e=>{if(e.isIntersecting){runCounter(e.target);cObs.unobserve(e.target);}})},{threshold:.5});
+document.querySelectorAll('.stat .num').forEach(el=>cObs.observe(el));
+
+/* ============================================================
+   SCROLLSPY NAV
+   ============================================================ */
+const secs=[...document.querySelectorAll('section[id]')];
+const links=[...document.querySelectorAll('nav a.lnk')];
+const spy=new IntersectionObserver((es)=>{
+  es.forEach(e=>{ if(e.isIntersecting){
+    links.forEach(l=>l.classList.toggle('active', l.getAttribute('href')==='#'+e.target.id));
+  }});
+},{rootMargin:'-45% 0px -50% 0px'});
+secs.forEach(s=>spy.observe(s));
+
+/* ============================================================
+   CALENDAR (days 6-10 fire)
+   ============================================================ */
+const cal=document.getElementById('calGrid');
+['S','M','T','W','T','F','S'].forEach(d=>{const e=document.createElement('div');e.className='dow';e.textContent=d;cal.appendChild(e);});
+// arbitrary month layout: 1st on a Wednesday -> 2 leading blanks (just for a clean demo grid)
+const lead=3;
+for(let i=0;i<lead;i++){const e=document.createElement('div');e.className='day empty';cal.appendChild(e);}
+for(let d=1;d<=30;d++){
+  const e=document.createElement('div');
+  e.className='day'+((d>=6&&d<=10)?' fire':'');
+  e.textContent=d; cal.appendChild(e);
+}
+</script>
+</body>
+</html>
