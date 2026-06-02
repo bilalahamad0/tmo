@@ -7,6 +7,7 @@
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple&logoColor=white)
 ![Playwright](https://img.shields.io/badge/Playwright-2EAD33?logo=playwright&logoColor=white)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Live Diagram](https://img.shields.io/badge/%E2%96%B6%20live-architecture%20diagram-E20074?logo=html5&logoColor=white)](https://bilalahamad0.github.io/tmo/architecture.html)
 
 Hands-off monthly handler for the T-Mobile bill on macOS:
 
@@ -25,6 +26,8 @@ A single confirmed payment per month is enforced by an idempotent state file. On
 ---
 
 ## Pipeline
+
+> 🎬 **[Interactive animated diagram →](https://bilalahamad0.github.io/tmo/architecture.html)** — a live, self-contained walkthrough of all 8 stages, the module architecture, system-design trust boundary, security model, and schedule.
 
 ```
 [0] Detect T-Mobile bill SMS in Messages.app          (skip portal login if absent)
