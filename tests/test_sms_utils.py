@@ -17,6 +17,15 @@ SAMPLE_TMO_SMS = (
     "using the payment method on file. Check out your member savings..."
 )
 
+# A different real wording T-Mobile uses on other cycles (observed June 2026):
+# "monthly" sits between "your" and "bill", and the amount is phrased as an
+# "AutoPay withdrawal for $X" instead of "balance due is $X".
+SAMPLE_TMO_SMS_MONTHLY = (
+    "T-Mobile: Your monthly bill for account XXXXX6522 is ready. "
+    "Your AutoPay withdrawal for $187.42 is scheduled for 06/23/2026 "
+    "using the credit card ending in 2176. You can update your AutoPay..."
+)
+
 
 def _ns_minus(seconds: int) -> int:
     """Return chat.db-style date_ns for now minus N seconds."""
@@ -36,6 +45,29 @@ def test_balance_re_extracts_amount():
     m = sms_utils.BALANCE_RE.search(SAMPLE_TMO_SMS)
     assert m is not None
     assert float(m.group(1).replace(",", "")) == 207.38
+
+
+def test_tmobile_bill_re_matches_monthly_bill_wording():
+    """Regression: 'Your monthly bill ... is ready' (June 2026 wording) must
+    match. The inserted word 'monthly' between 'your' and 'bill' previously
+    broke detection, so the live pipeline silently never paid the bill."""
+    assert sms_utils.TMOBILE_BILL_RE.search(SAMPLE_TMO_SMS_MONTHLY) is not None
+
+
+def test_balance_re_extracts_autopay_withdrawal_amount():
+    """The 'AutoPay withdrawal for $X' phrasing must yield the amount too."""
+    m = sms_utils.BALANCE_RE.search(SAMPLE_TMO_SMS_MONTHLY)
+    assert m is not None
+    assert float(m.group(1).replace(",", "")) == 187.42
+
+
+def test_find_tmobile_bill_sms_matches_monthly_wording():
+    fake_rows = [(SAMPLE_TMO_SMS_MONTHLY, _ns_minus(3600), "2535")]
+    with patch.object(sms_utils, "_read_messages", return_value=fake_rows):
+        result = sms_utils.find_tmobile_bill_sms(within_days=14)
+    assert result is not None
+    assert result["balance"] == 187.42
+    assert result["sender"] == "2535"
 
 
 def test_find_tmobile_bill_sms_returns_match():
