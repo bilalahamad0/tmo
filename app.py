@@ -471,7 +471,7 @@ def _run_pipeline(
         )
         return 0
 
-    if status != "sent":
+    if status not in ("sent", "sent_unconfirmed"):
         err = result.get("error", "unknown")
         screenshot = result.get("screenshot")
         notify.send_failure_alert(
@@ -484,6 +484,34 @@ def _run_pipeline(
     recipient_name = result.get("recipient_name") or get_env_or_keychain(
         "ZELLE_RECIPIENT_NAME", "ZELLE_RECIPIENT_NAME"
     )
+
+    # The live Pay click happened but no confirmation ID was captured. The
+    # money may or may not have moved, so do NOT write zelle_confirmed_at
+    # (that would falsely lock the month as paid with no proof). Flag it for
+    # manual verification and alert. zelle_attempted_at is already set, so
+    # the safety gate refuses any AUTOMATIC retry - a human must check Bank
+    # of America, then either delete the state file (to retry) or treat it
+    # as paid.
+    if status == "sent_unconfirmed" or not confirmation_id:
+        st = state_mod.update_state(
+            year_month,
+            zelle_unconfirmed_at=state_mod.now_iso(),
+            zelle_screenshot=screenshot,
+        )
+        msg = (
+            "Zelle Pay was clicked but NO confirmation ID was captured. The "
+            "payment may or may not have completed - MANUAL verification in "
+            "Bank of America is required before the next run. Automatic retry "
+            "is blocked to avoid a double payment. To retry after confirming "
+            "no payment went through, delete "
+            f"~/.tmo_state/bill_{year_month}.json."
+        )
+        print(msg)
+        notify.send_failure_alert(
+            "zelle_unconfirmed", msg, [screenshot] if screenshot else []
+        )
+        return 6
+
     st = state_mod.update_state(
         year_month,
         zelle_confirmed_at=state_mod.now_iso(),
@@ -517,7 +545,15 @@ def main() -> int:
         print("--force flag set: idempotency guards relaxed for this run.")
 
     try:
-        return _run_pipeline(year_month, explicit_pdf, force=force)
+        with state_mod.month_lock(year_month) as acquired:
+            if not acquired:
+                print(
+                    "Another run is already processing this month "
+                    f"({year_month}); exiting to avoid concurrent or "
+                    "duplicate Zelle payment."
+                )
+                return 0
+            return _run_pipeline(year_month, explicit_pdf, force=force)
     except Exception as e:
         tb = traceback.format_exc()
         print(f"Pipeline crashed: {e}\n{tb}")

@@ -5,6 +5,8 @@ for what the pipeline has already done for the current month's bill. The
 zelle_confirmed_at field is the hard guard against double-paying: once set,
 the pipeline refuses to send Zelle again for that month.
 """
+import contextlib
+import fcntl
 import json
 import os
 import tempfile
@@ -17,6 +19,45 @@ STATE_DIR = Path.home() / ".tmo_state"
 
 def _state_path(year_month: str) -> Path:
     return STATE_DIR / f"bill_{year_month}.json"
+
+
+def _lock_path(year_month: str) -> Path:
+    return STATE_DIR / f"bill_{year_month}.lock"
+
+
+@contextlib.contextmanager
+def month_lock(year_month: str):
+    """Exclusive, non-blocking per-month run lock.
+
+    Prevents two concurrent pipeline runs (e.g. an overlapping scheduled
+    fire and a manual run, or a hung prior run) from both passing the Zelle
+    safety gate and sending duplicate REAL payments for the same bill month.
+
+    Yields True if the lock was acquired, False if another process already
+    holds it. The OS releases the lock automatically when the holding
+    process exits or dies, so a crash cannot wedge future runs.
+    """
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(STATE_DIR, 0o700)
+    except OSError:
+        pass
+    lock_file = open(_lock_path(year_month), "w")
+    try:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+    finally:
+        lock_file.close()
 
 
 def now_iso() -> str:
