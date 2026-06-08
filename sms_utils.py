@@ -19,14 +19,22 @@ from datetime import datetime
 COCOA_EPOCH_OFFSET = 978307200  # seconds between 1970-01-01 and 2001-01-01
 DB_PATH = os.path.expanduser("~/Library/Messages/chat.db")
 
-# T-Mobile sends "Your bill is ready" SMS from short code 2535.
-# Match the announcement text; sender match is a bonus signal.
+# T-Mobile sends a "bill is ready" SMS from short code 2535. The wording
+# varies between cycles, e.g.:
+#   "Your bill for your account ending in 6522 is ready."   (balance due is $X)
+#   "Your monthly bill for account XXXXX6522 is ready."     (AutoPay withdrawal for $X)
+# so allow optional modifier words (e.g. "monthly") between "your" and "bill".
+# Sender (2535) match is a bonus signal, not required.
 TMOBILE_BILL_RE = re.compile(
-    r"T-?Mobile.{0,40}your bill.{0,80}is ready",
+    r"T-?Mobile.{0,40}your\b.{0,30}bill.{0,80}is ready",
     re.IGNORECASE | re.DOTALL,
 )
+# Capture the dollar amount from either the "balance due is $X" phrasing or
+# the newer "(AutoPay) withdrawal for $X" phrasing. Informational only - the
+# authoritative amount is parsed from the downloaded PDF.
 BALANCE_RE = re.compile(
-    r"balance\s+due\s+is\s+\$?([\d,]+\.\d{2})", re.IGNORECASE
+    r"(?:balance\s+due\s+is|(?:autopay\s+)?withdrawal\s+for)\s+\$?([\d,]+\.\d{2})",
+    re.IGNORECASE,
 )
 
 
