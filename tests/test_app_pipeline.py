@@ -328,7 +328,7 @@ def test_summary_skipped_when_already_sent_without_force(pipeline):
 # main() argument handling
 # --------------------------------------------------------------------------
 
-def test_main_parses_force_flag(monkeypatch):
+def test_main_parses_force_flag(monkeypatch, state_dir):
     captured = {}
 
     def fake_pipeline(year_month, explicit_pdf, force=False):
@@ -344,7 +344,7 @@ def test_main_parses_force_flag(monkeypatch):
     assert captured["explicit_pdf"] is None
 
 
-def test_main_parses_explicit_pdf_arg(monkeypatch):
+def test_main_parses_explicit_pdf_arg(monkeypatch, state_dir):
     captured = {}
 
     def fake_pipeline(year_month, explicit_pdf, force=False):
@@ -360,7 +360,7 @@ def test_main_parses_explicit_pdf_arg(monkeypatch):
     assert captured["force"] is False
 
 
-def test_main_crash_sends_alert_and_returns_1(monkeypatch):
+def test_main_crash_sends_alert_and_returns_1(monkeypatch, state_dir):
     monkeypatch.setattr(
         app, "_run_pipeline", MagicMock(side_effect=RuntimeError("boom"))
     )
@@ -371,3 +371,66 @@ def test_main_crash_sends_alert_and_returns_1(monkeypatch):
     assert app.main() == 1
     alert.assert_called_once()
     assert alert.call_args[0][0] == "pipeline_crash"
+
+
+def test_main_exits_cleanly_when_month_lock_already_held(monkeypatch, state_dir):
+    """If another process already holds this month's lock, main() must exit 0
+    without running the pipeline - the concurrent-double-pay guard."""
+    ym = state_mod.current_year_month()
+    run = MagicMock(return_value=0)
+    monkeypatch.setattr(app, "_run_pipeline", run)
+    monkeypatch.setattr(sys, "argv", ["app.py"])
+
+    with state_mod.month_lock(ym) as held:
+        assert held is True
+        rc = app.main()
+
+    assert rc == 0
+    run.assert_not_called()
+
+
+# --------------------------------------------------------------------------
+# Unconfirmed live payment (Pay clicked, no confirmation ID captured)
+# --------------------------------------------------------------------------
+
+def test_zelle_sent_unconfirmed_flags_for_manual_review(pipeline, monkeypatch):
+    monkeypatch.setenv("ZELLE_LIVE_SEND", "1")
+    pipeline.trigger_zelle.return_value = {
+        "status": "sent_unconfirmed",
+        "confirmation_id": None,
+        "screenshot": "zelle_review_x.png",
+        "recipient_name": "Real Recipient",
+    }
+
+    rc = app._run_pipeline(YM, pipeline.fake_pdf, force=False)
+
+    assert rc == 6
+    pipeline.send_failure.assert_called_once()
+    assert pipeline.send_failure.call_args[0][0] == "zelle_unconfirmed"
+    pipeline.send_confirmation.assert_not_called()
+
+    st = _state()
+    # Attempt is recorded (blocks auto-retry) but NOT marked confirmed/paid.
+    assert st["zelle_attempted_at"]
+    assert st["zelle_unconfirmed_at"]
+    assert "zelle_confirmed_at" not in st
+
+
+def test_zelle_sent_with_empty_confirmation_id_is_unconfirmed(pipeline, monkeypatch):
+    """A 'sent' status with no confirmation_id is treated as unconfirmed - it
+    must not falsely mark the month paid."""
+    monkeypatch.setenv("ZELLE_LIVE_SEND", "1")
+    pipeline.trigger_zelle.return_value = {
+        "status": "sent",
+        "confirmation_id": None,
+        "screenshot": "zelle_review_x.png",
+        "recipient_name": "Real Recipient",
+    }
+
+    rc = app._run_pipeline(YM, pipeline.fake_pdf, force=False)
+
+    assert rc == 6
+    pipeline.send_confirmation.assert_not_called()
+    st = _state()
+    assert st["zelle_unconfirmed_at"]
+    assert "zelle_confirmed_at" not in st

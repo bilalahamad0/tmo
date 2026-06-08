@@ -70,3 +70,35 @@ def test_current_year_month_format():
     assert ym[4] == "-"
     int(ym[:4])
     assert 1 <= int(ym[5:7]) <= 12
+
+
+def test_month_lock_acquires_and_releases():
+    with tempfile.TemporaryDirectory() as tmp:
+        with _patched_state_dir(Path(tmp)):
+            with state.month_lock("2026-06") as acquired:
+                assert acquired is True
+            # Lock is released on exit, so it can be re-acquired.
+            with state.month_lock("2026-06") as again:
+                assert again is True
+
+
+def test_month_lock_blocks_second_holder():
+    """A second acquisition of the same month's lock while the first is held
+    must return False (this is the concurrent-double-pay guard)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        with _patched_state_dir(Path(tmp)):
+            with state.month_lock("2026-06") as first:
+                assert first is True
+                with state.month_lock("2026-06") as second:
+                    assert second is False
+
+
+def test_month_lock_is_per_month():
+    """Different bill months use independent locks and never block each
+    other."""
+    with tempfile.TemporaryDirectory() as tmp:
+        with _patched_state_dir(Path(tmp)):
+            with state.month_lock("2026-06") as a:
+                assert a is True
+                with state.month_lock("2026-07") as b:
+                    assert b is True
