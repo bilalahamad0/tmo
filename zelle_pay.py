@@ -414,6 +414,33 @@ def handle_boa_zelle(amount: str) -> dict:
             "error": "ZELLE_RECIPIENT_NAME not configured (env or Keychain).",
         }
 
+    # Defense-in-depth amount validation. app.py's safety gate also enforces
+    # this, but a direct `python zelle_pay.py <amount>` invocation must NOT be
+    # able to bypass the cap. Mirrors app.py: ZELLE_AMOUNT_CAP via env or
+    # Keychain, default 300.
+    try:
+        amt = float(amount)
+    except (TypeError, ValueError):
+        return {"status": "error", "error": f"Invalid amount: {amount!r}"}
+    if amt <= 0:
+        return {
+            "status": "error",
+            "error": "Amount is 0 or negative; nothing to pay.",
+        }
+    cap_str = get_env_or_keychain("ZELLE_AMOUNT_CAP", "ZELLE_AMOUNT_CAP")
+    try:
+        cap = float(cap_str) if cap_str else 300.0
+    except ValueError:
+        cap = 300.0
+    if amt > cap:
+        return {
+            "status": "error",
+            "error": (
+                f"Amount ${amt:.2f} exceeds cap ${cap:.2f}; refusing to send. "
+                "Raise ZELLE_AMOUNT_CAP only after manual review."
+            ),
+        }
+
     live = _live_send_enabled()
     print(
         f"Starting Zelle Payment Automation for ${amount} to {recipient_name} "
@@ -696,8 +723,11 @@ def handle_boa_zelle(amount: str) -> dict:
             confirmation_id, screenshot = _capture_confirmation(page)
             context.close()
 
+            # If the Pay click succeeded but no confirmation ID could be
+            # captured, report a DISTINCT status so app.py flags the month for
+            # manual verification instead of silently marking it paid.
             return {
-                "status": "sent",
+                "status": "sent" if confirmation_id else "sent_unconfirmed",
                 "confirmation_id": confirmation_id,
                 "screenshot": screenshot,
                 "recipient_name": recipient_name,
@@ -725,4 +755,8 @@ if __name__ == "__main__":
     amount_to_pay = sys.argv[1] if len(sys.argv) > 1 else "0.00"
     result = handle_boa_zelle(amount_to_pay)
     _emit(result)
-    sys.exit(0 if result.get("status") in ("sent", "dry_run") else 1)
+    sys.exit(
+        0
+        if result.get("status") in ("sent", "dry_run", "sent_unconfirmed")
+        else 1
+    )
