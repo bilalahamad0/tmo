@@ -65,27 +65,81 @@ def _login(page, t_user: str) -> None:
     time.sleep(3)
     _dismiss_cookie_banner(page)
 
-    # If a username input is visible, we need to log in. Otherwise we're already on
-    # the authenticated dashboard.
-    username_locator = page.locator(
-        'input[name="username"]:visible, #username:visible'
-    )
+    # Differentiate sign-in screen vs dashboard by URL (definitive, from the
+    # run log): a valid session stays on /my-account/dashboard; an expired one
+    # redirects to account.t-mobile.com/signin. The previous check ("is
+    # input[name=username] absent?") is unreliable because the current sign-in
+    # field is NOT named "username", so it found 0 fields and wrongly reported
+    # "already logged in" even on the sign-in screen.
     try:
-        already_logged_in = username_locator.count() == 0
+        page.wait_for_load_state("domcontentloaded", timeout=20000)
     except Exception:
-        already_logged_in = False
-
-    if already_logged_in:
+        pass
+    time.sleep(3)
+    url_l = page.url.lower()
+    on_signin = (
+        "signin" in url_l or "/login" in url_l or "account.t-mobile.com" in url_l
+    )
+    if not on_signin and "/my-account/dashboard" in url_l:
         print("Already logged in via persistent profile. Skipping login flow.")
         return
 
-    print("Username field visible; performing login + push 2FA flow...")
-    u_field = username_locator.first
-    u_field.wait_for(state="visible", timeout=20000)
+    print(f"Sign-in screen detected (url={page.url}); logging in...")
+
+    # Diagnostic: log every <input> across all frames so the REAL sign-in
+    # field's attributes appear in automation.log (no guessing about its name).
+    for fr in page.frames:
+        try:
+            fields = fr.eval_on_selector_all(
+                "input",
+                "els => els.map(e => ({type:e.type,name:e.name,id:e.id,"
+                "ph:e.placeholder,aria:e.getAttribute('aria-label'),"
+                "ac:e.autocomplete,vis:!!e.offsetParent}))",
+            )
+            visible = [f for f in fields if f.get("vis")]
+            if visible:
+                print(f"INPUTS @ {fr.url[:60]}: {visible}")
+        except Exception as exc:
+            print(f"input-dump error: {exc}")
+
+    # Find the sign-in field across frames (its name is not "username"); the
+    # first visible text/email/tel input is the email/phone field.
+    u_field = None
+    for fr in page.frames:
+        for sel in (
+            'input[type="email"]:visible', 'input[type="tel"]:visible',
+            'input[autocomplete="username"]:visible',
+            'input[name="username"]:visible', '#username:visible',
+            'input[type="text"]:visible',
+        ):
+            try:
+                loc = fr.locator(sel).first
+                if loc.count() > 0:
+                    loc.wait_for(state="visible", timeout=4000)
+                    u_field = loc
+                    break
+            except Exception:
+                continue
+        if u_field is not None:
+            break
+    if u_field is None:
+        try:
+            page.screenshot(path="login_error.png")
+        except Exception:
+            pass
+        raise RuntimeError(f"Sign-in field not found on {page.url}")
     u_field.fill(t_user)
+    print(f"Entered T-Mobile username (len={len(t_user)}).")
 
     print("Clicking Next...")
-    page.locator('button:has-text("Next")').click()
+    try:
+        page.get_by_role(
+            "button", name=re.compile(r"next|log\s*in|continue|sign\s*in", re.I)
+        ).first.click(timeout=10000)
+    except Exception:
+        page.locator(
+            'button:has-text("Next"), button[type="submit"]'
+        ).first.click()
 
     print("Checking for Face ID / Fingerprint option...")
     f_btn = page.locator(
