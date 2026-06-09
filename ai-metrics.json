@@ -1,6 +1,6 @@
 {
   "projectId": "tmo",
-  "lastUpdated": "2026-06-07",
+  "lastUpdated": "2026-06-09",
   "aiContribution": 75,
   "agents": [
     {
@@ -12,9 +12,20 @@
       ],
       "tokens": 90000,
       "role": "Pipeline scaffolding & automation architecture"
+    },
+    {
+      "name": "Claude Code",
+      "provider": "Anthropic",
+      "period": "May 2026 – Present",
+      "models": [
+        "Claude Opus 4.8",
+        "Claude Opus 4.7"
+      ],
+      "tokens": 120933204,
+      "role": "Zelle hardening, login robustness & dashboards"
     }
   ],
-  "totalTokens": 90000,
+  "totalTokens": 121023204,
   "totalCommits": 18,
   "linesOfCode": 4241,
   "devCycleDays": 3,
