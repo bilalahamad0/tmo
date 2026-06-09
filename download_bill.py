@@ -65,11 +65,26 @@ def _login(page, t_user: str) -> None:
     time.sleep(3)
     _dismiss_cookie_banner(page)
 
-    # If a username input is visible, we need to log in. Otherwise we're already on
-    # the authenticated dashboard.
+    # Decide login state only AFTER a definitive signal renders. An expired
+    # session redirects /dashboard to the sign-in page, which can take several
+    # seconds to paint the username field, so the original one-shot check right
+    # after goto could race that redirect and wrongly report "already logged in"
+    # (observed: the log said "already logged in" while the captured screenshot
+    # was the sign-in form). Wait for whichever appears first: the sign-in
+    # username field (=> we must log in) or the dashboard's "View bill" control
+    # (=> already authenticated). The same selectors as before still decide it;
+    # we only stop judging it prematurely.
     username_locator = page.locator(
         'input[name="username"]:visible, #username:visible'
     )
+    try:
+        page.wait_for_selector(
+            'input[name="username"]:visible, #username:visible, '
+            'a:has-text("View bill"), button:has-text("View bill")',
+            timeout=25000,
+        )
+    except Exception:
+        pass
     try:
         already_logged_in = username_locator.count() == 0
     except Exception:
