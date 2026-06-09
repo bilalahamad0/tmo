@@ -161,13 +161,66 @@ def _login(page, t_user: str) -> None:
 
 
 def _navigate_to_bill_page(page) -> None:
-    """Click 'View bill' from the dashboard and wait for /bill/summary."""
+    """Click 'View bill' from the dashboard and wait for /bill/summary.
+
+    The OneTrust 'T-Mobile Notice' consent pop-up renders a few seconds AFTER
+    the dashboard loads, so dismissing overlays once immediately is too early -
+    its dark filter (.onetrust-pc-dark-filter) then intercepts the 'View bill'
+    click. We wait for the pop-up, Reject it, wait for the backdrop to clear,
+    then click (with retries + a direct-navigation fallback).
+    """
+    # Wait for the consent pop-up to actually render, then Reject it.
+    try:
+        page.wait_for_selector(
+            "#onetrust-consent-sdk button, #onetrust-reject-all-handler, "
+            ".onetrust-pc-dark-filter",
+            timeout=12000,
+        )
+    except Exception:
+        pass
     _dismiss_overlays(page)
+    # Ensure the OneTrust dark backdrop is gone before we click underneath it.
+    try:
+        page.wait_for_selector(
+            ".onetrust-pc-dark-filter", state="hidden", timeout=8000
+        )
+    except Exception:
+        pass
+
     v_link = page.locator(
         'a:has-text("View bill"), button:has-text("View bill")'
     ).first
     v_link.wait_for(state="visible", timeout=30000)
-    v_link.click()
+
+    # Click with retries: if an overlay re-intercepts, Reject it again and retry.
+    clicked = False
+    for attempt in range(6):
+        try:
+            v_link.click(timeout=8000)
+            clicked = True
+            break
+        except Exception:
+            print(
+                f"'View bill' click intercepted (attempt {attempt + 1}); "
+                "re-dismissing the consent pop-up..."
+            )
+            _dismiss_overlays(page)
+            try:
+                page.wait_for_selector(
+                    ".onetrust-pc-dark-filter", state="hidden", timeout=5000
+                )
+            except Exception:
+                pass
+    if not clicked:
+        # Fallback: the link's href is /bill/summary - navigate there directly,
+        # which sidesteps any lingering overlay intercept.
+        print("Falling back to direct navigation to /bill/summary.")
+        page.goto(
+            "https://www.t-mobile.com/bill/summary",
+            wait_until="domcontentloaded",
+            timeout=60000,
+        )
+
     page.wait_for_url("**/bill/summary**", timeout=60000)
     time.sleep(5)
     # Dismiss any overlays that appear on the bill summary page (MoEngage etc.)
