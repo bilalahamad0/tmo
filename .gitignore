@@ -1,6 +1,9 @@
 # Environments
 .env
 
+# Generated dashboard (rebuilt by dashboard.py from ~/.tmo_state)
+dashboard.html
+
 # Python
 __pycache__/
 *.py[cod]
