@@ -49,6 +49,35 @@ def _parse_posted_date(text: str) -> str | None:
         return None
 
 
+def _find_signin_field(page):
+    """Locate the T-Mobile sign-in (email/phone) field across the page AND any
+    child frames, without depending on a specific name/id/placeholder. The
+    field is a plain text/email input; we try the most specific signals first
+    and fall back to the first visible text input. Returns a Locator or None."""
+    selectors = [
+        'input[type="email"]:visible',
+        'input[type="tel"]:visible',
+        'input[autocomplete="username"]:visible',
+        'input[name="username"]:visible',
+        '#username:visible',
+        'input[placeholder*="email" i]:visible',
+        'input[placeholder*="phone" i]:visible',
+        'input[aria-label*="email" i]:visible',
+        'input[aria-label*="phone" i]:visible',
+        'input[type="text"]:visible',
+    ]
+    for fr in page.frames:
+        for sel in selectors:
+            try:
+                loc = fr.locator(sel).first
+                if loc.count() > 0:
+                    loc.wait_for(state="visible", timeout=4000)
+                    return loc
+            except Exception:
+                continue
+    return None
+
+
 def _login(page, t_user: str) -> None:
     """Phase 1: go to dashboard; if persistent session is active, skip login.
 
@@ -65,47 +94,50 @@ def _login(page, t_user: str) -> None:
     time.sleep(3)
     _dismiss_cookie_banner(page)
 
-    # The T-Mobile sign-in field is labelled "Email or phone number". Its
-    # name/id is NOT reliably "username" (the old assumption never surfaced
-    # because a valid session always skipped login), so match it broadly:
-    # by autocomplete/identifier names, type=email, and the visible placeholder.
-    username_sel = (
-        'input[name="username"], #username, input[autocomplete="username"], '
-        'input[name="identifier"], input[type="email"], '
-        'input[placeholder*="Email" i], input[placeholder*="phone" i]'
-    )
-    # Decide login state only after a definitive signal renders: the sign-in
-    # field (=> must log in) or the dashboard "View bill" control (=> already in).
+    # Determine login state by the LANDING URL (definitive). A valid session
+    # stays on /my-account/dashboard; an expired one redirects to the
+    # account.t-mobile.com sign-in page (observed in the run log:
+    # https://account.t-mobile.com/signin/v2/...). The old "is the username
+    # field absent?" check failed because the field's attributes don't match a
+    # fixed selector - so we judge by URL, which the log proves is reliable.
     try:
-        page.wait_for_selector(
-            username_sel
-            + ', a:has-text("View bill"), button:has-text("View bill")',
-            timeout=25000,
-        )
+        page.wait_for_load_state("domcontentloaded", timeout=20000)
     except Exception:
         pass
-    username_locator = page.locator(username_sel)
-    try:
-        field_count = username_locator.count()
-    except Exception:
-        field_count = 0
-    print(f"Login-state check: url={page.url} | sign-in fields found={field_count}")
+    time.sleep(3)
+    url_l = page.url.lower()
+    on_signin = (
+        "signin" in url_l or "/login" in url_l or "account.t-mobile.com" in url_l
+    )
+    already_logged_in = ("/my-account/dashboard" in url_l) and not on_signin
+    print(f"Login-state check: url={page.url} | already_logged_in={already_logged_in}")
 
-    if field_count == 0:
+    if already_logged_in:
         print("Already logged in via persistent profile. Skipping login flow.")
         return
 
-    print("Sign-in form detected; performing login + push 2FA flow...")
-    u_field = username_locator.first
-    u_field.wait_for(state="visible", timeout=20000)
+    print("Sign-in page detected; performing login + push 2FA flow...")
+    u_field = _find_signin_field(page)
+    if u_field is None:
+        try:
+            page.screenshot(path="login_error.png")
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"Could not find the T-Mobile sign-in field on {page.url}"
+        )
     u_field.fill(t_user)
-    print(f"Entered T-Mobile username into the sign-in field (len={len(t_user)}).")
+    print(f"Entered T-Mobile username (len={len(t_user)}).")
 
     print("Clicking Next...")
-    page.locator(
-        'button:has-text("Next"), button:has-text("Log in"), '
-        'button[type="submit"]'
-    ).first.click()
+    try:
+        page.get_by_role(
+            "button", name=re.compile(r"next|log\s*in|continue|sign\s*in", re.I)
+        ).first.click(timeout=10000)
+    except Exception:
+        page.locator(
+            'button:has-text("Next"), button[type="submit"]'
+        ).first.click()
 
     # Capture the screen AFTER username+Next so the post-username flow is
     # visible (in logs + the failure-alert screenshot) even if a later step's
