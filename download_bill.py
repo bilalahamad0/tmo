@@ -49,35 +49,6 @@ def _parse_posted_date(text: str) -> str | None:
         return None
 
 
-def _find_signin_field(page):
-    """Locate the T-Mobile sign-in (email/phone) field across the page AND any
-    child frames, without depending on a specific name/id/placeholder. The
-    field is a plain text/email input; we try the most specific signals first
-    and fall back to the first visible text input. Returns a Locator or None."""
-    selectors = [
-        'input[type="email"]:visible',
-        'input[type="tel"]:visible',
-        'input[autocomplete="username"]:visible',
-        'input[name="username"]:visible',
-        '#username:visible',
-        'input[placeholder*="email" i]:visible',
-        'input[placeholder*="phone" i]:visible',
-        'input[aria-label*="email" i]:visible',
-        'input[aria-label*="phone" i]:visible',
-        'input[type="text"]:visible',
-    ]
-    for fr in page.frames:
-        for sel in selectors:
-            try:
-                loc = fr.locator(sel).first
-                if loc.count() > 0:
-                    loc.wait_for(state="visible", timeout=4000)
-                    return loc
-            except Exception:
-                continue
-    return None
-
-
 def _login(page, t_user: str) -> None:
     """Phase 1: go to dashboard; if persistent session is active, skip login.
 
@@ -94,78 +65,40 @@ def _login(page, t_user: str) -> None:
     time.sleep(3)
     _dismiss_cookie_banner(page)
 
-    # Determine login state by the LANDING URL (definitive). A valid session
-    # stays on /my-account/dashboard; an expired one redirects to the
-    # account.t-mobile.com sign-in page (observed in the run log:
-    # https://account.t-mobile.com/signin/v2/...). The old "is the username
-    # field absent?" check failed because the field's attributes don't match a
-    # fixed selector - so we judge by URL, which the log proves is reliable.
-    try:
-        page.wait_for_load_state("domcontentloaded", timeout=20000)
-    except Exception:
-        pass
-    time.sleep(3)
-    url_l = page.url.lower()
-    on_signin = (
-        "signin" in url_l or "/login" in url_l or "account.t-mobile.com" in url_l
+    # If a username input is visible, we need to log in. Otherwise we're already on
+    # the authenticated dashboard.
+    username_locator = page.locator(
+        'input[name="username"]:visible, #username:visible'
     )
-    already_logged_in = ("/my-account/dashboard" in url_l) and not on_signin
-    print(f"Login-state check: url={page.url} | already_logged_in={already_logged_in}")
+    try:
+        already_logged_in = username_locator.count() == 0
+    except Exception:
+        already_logged_in = False
 
     if already_logged_in:
         print("Already logged in via persistent profile. Skipping login flow.")
         return
 
-    print("Sign-in page detected; performing login + push 2FA flow...")
-    u_field = _find_signin_field(page)
-    if u_field is None:
-        try:
-            page.screenshot(path="login_error.png")
-        except Exception:
-            pass
-        raise RuntimeError(
-            f"Could not find the T-Mobile sign-in field on {page.url}"
-        )
+    print("Username field visible; performing login + push 2FA flow...")
+    u_field = username_locator.first
+    u_field.wait_for(state="visible", timeout=20000)
     u_field.fill(t_user)
-    print(f"Entered T-Mobile username (len={len(t_user)}).")
 
     print("Clicking Next...")
-    try:
-        page.get_by_role(
-            "button", name=re.compile(r"next|log\s*in|continue|sign\s*in", re.I)
-        ).first.click(timeout=10000)
-    except Exception:
-        page.locator(
-            'button:has-text("Next"), button[type="submit"]'
-        ).first.click()
+    page.locator('button:has-text("Next")').click()
 
-    # Capture the screen AFTER username+Next so the post-username flow is
-    # visible (in logs + the failure-alert screenshot) even if a later step's
-    # selector still needs updating to match the current page.
-    try:
-        page.wait_for_load_state("domcontentloaded", timeout=15000)
-    except Exception:
-        pass
-    time.sleep(2)
-    try:
-        page.screenshot(path="after_username_next.png")
-        print("Captured post-username screen -> after_username_next.png")
-    except Exception:
-        pass
-    print(f"After Next: url={page.url}")
-
-    print("Looking for Face ID / Fingerprint (passwordless) option...")
+    print("Checking for Face ID / Fingerprint option...")
     f_btn = page.locator(
         'button:has-text("Continue with Face ID/Fingerprint")'
     )
     f_btn.wait_for(state="visible", timeout=15000)
     f_btn.click()
 
-    print("Waiting for 'Check the notification' push prompt...")
+    print("Waiting for 'Check the notification' message...")
     n_msg = page.locator("text=/Check the notification/i")
     n_msg.wait_for(state="visible", timeout=30000)
 
-    print("Sending 2FA alert email (approve the push on your phone)...")
+    print("Sending 2FA alert email...")
     send_2fa_alert()
 
     page.wait_for_url("**/my-account/dashboard**", timeout=300000)
