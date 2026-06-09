@@ -373,9 +373,19 @@ def _capture_confirmation(page) -> tuple[str | None, str]:
         print(f"Could not screenshot confirmation page: {e}")
         screenshot = ""
 
-    # Step 5: try multiple ID patterns
+    # Step 5: try multiple ID patterns across the main page AND every iframe.
+    # BoA renders the Zelle send/confirmation UI - and the "Confirmation #" -
+    # inside an iframe, so the main-frame body text alone never contained the
+    # ID (the previous capture only read page.locator("body"), which is why a
+    # genuinely successful payment was reported as sent_unconfirmed).
     try:
-        body_text = page.locator("body").inner_text(timeout=10000)
+        texts = []
+        for fr in page.frames:
+            try:
+                texts.append(fr.locator("body").inner_text(timeout=5000))
+            except Exception:
+                continue
+        body_text = "\n".join(texts)
         for pat in CONFIRMATION_PATTERNS:
             m = pat.search(body_text)
             if m:
@@ -384,8 +394,8 @@ def _capture_confirmation(page) -> tuple[str | None, str]:
                 break
         if not confirmation_id:
             print(
-                "No confirmation ID pattern matched. First 400 chars of "
-                f"page:\n{body_text[:400]}"
+                f"No confirmation ID pattern matched across {len(texts)} "
+                f"frame(s). First 400 chars:\n{body_text[:400]}"
             )
     except Exception as e:
         print(f"Could not read confirmation text: {e}")
