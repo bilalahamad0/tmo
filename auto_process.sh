@@ -29,4 +29,9 @@ else
     echo "--- Automation Exited With Code $EXIT_CODE: $(date) ---" >> "$LOG_FILE"
 fi
 
+# Refresh the local monthly transactions dashboard (best-effort; runs AFTER the
+# pipeline so it never affects the run or its exit code). Keeps dashboard.html
+# current after every scheduled run with no manual step.
+"$PYTHON_PATH" -u "$REPO_DIR/dashboard.py" >> "$LOG_FILE" 2>&1 || true
+
 exit $EXIT_CODE
