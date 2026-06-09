@@ -17,7 +17,10 @@ cd "$REPO_DIR" || exit 1
 
 echo "--- Automation Started: $(date) ---" >> "$LOG_FILE"
 
-"$PYTHON_PATH" -u "$REPO_DIR/app.py" >> "$LOG_FILE" 2>&1
+# caffeinate -i holds off idle sleep for the entire run, so an unattended run
+# can't be cut short mid-flight (e.g. during the up-to-5-minute BoA MFA wait).
+# It releases automatically when app.py exits, so normal idle-sleep resumes.
+caffeinate -i "$PYTHON_PATH" -u "$REPO_DIR/app.py" >> "$LOG_FILE" 2>&1
 EXIT_CODE=$?
 
 if [ $EXIT_CODE -eq 0 ]; then
