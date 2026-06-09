@@ -65,55 +65,75 @@ def _login(page, t_user: str) -> None:
     time.sleep(3)
     _dismiss_cookie_banner(page)
 
-    # Decide login state only AFTER a definitive signal renders. An expired
-    # session redirects /dashboard to the sign-in page, which can take several
-    # seconds to paint the username field, so the original one-shot check right
-    # after goto could race that redirect and wrongly report "already logged in"
-    # (observed: the log said "already logged in" while the captured screenshot
-    # was the sign-in form). Wait for whichever appears first: the sign-in
-    # username field (=> we must log in) or the dashboard's "View bill" control
-    # (=> already authenticated). The same selectors as before still decide it;
-    # we only stop judging it prematurely.
-    username_locator = page.locator(
-        'input[name="username"]:visible, #username:visible'
+    # The T-Mobile sign-in field is labelled "Email or phone number". Its
+    # name/id is NOT reliably "username" (the old assumption never surfaced
+    # because a valid session always skipped login), so match it broadly:
+    # by autocomplete/identifier names, type=email, and the visible placeholder.
+    username_sel = (
+        'input[name="username"], #username, input[autocomplete="username"], '
+        'input[name="identifier"], input[type="email"], '
+        'input[placeholder*="Email" i], input[placeholder*="phone" i]'
     )
+    # Decide login state only after a definitive signal renders: the sign-in
+    # field (=> must log in) or the dashboard "View bill" control (=> already in).
     try:
         page.wait_for_selector(
-            'input[name="username"]:visible, #username:visible, '
-            'a:has-text("View bill"), button:has-text("View bill")',
+            username_sel
+            + ', a:has-text("View bill"), button:has-text("View bill")',
             timeout=25000,
         )
     except Exception:
         pass
+    username_locator = page.locator(username_sel)
     try:
-        already_logged_in = username_locator.count() == 0
+        field_count = username_locator.count()
     except Exception:
-        already_logged_in = False
+        field_count = 0
+    print(f"Login-state check: url={page.url} | sign-in fields found={field_count}")
 
-    if already_logged_in:
+    if field_count == 0:
         print("Already logged in via persistent profile. Skipping login flow.")
         return
 
-    print("Username field visible; performing login + push 2FA flow...")
+    print("Sign-in form detected; performing login + push 2FA flow...")
     u_field = username_locator.first
     u_field.wait_for(state="visible", timeout=20000)
     u_field.fill(t_user)
+    print(f"Entered T-Mobile username into the sign-in field (len={len(t_user)}).")
 
     print("Clicking Next...")
-    page.locator('button:has-text("Next")').click()
+    page.locator(
+        'button:has-text("Next"), button:has-text("Log in"), '
+        'button[type="submit"]'
+    ).first.click()
 
-    print("Checking for Face ID / Fingerprint option...")
+    # Capture the screen AFTER username+Next so the post-username flow is
+    # visible (in logs + the failure-alert screenshot) even if a later step's
+    # selector still needs updating to match the current page.
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=15000)
+    except Exception:
+        pass
+    time.sleep(2)
+    try:
+        page.screenshot(path="after_username_next.png")
+        print("Captured post-username screen -> after_username_next.png")
+    except Exception:
+        pass
+    print(f"After Next: url={page.url}")
+
+    print("Looking for Face ID / Fingerprint (passwordless) option...")
     f_btn = page.locator(
         'button:has-text("Continue with Face ID/Fingerprint")'
     )
     f_btn.wait_for(state="visible", timeout=15000)
     f_btn.click()
 
-    print("Waiting for 'Check the notification' message...")
+    print("Waiting for 'Check the notification' push prompt...")
     n_msg = page.locator("text=/Check the notification/i")
     n_msg.wait_for(state="visible", timeout=30000)
 
-    print("Sending 2FA alert email...")
+    print("Sending 2FA alert email (approve the push on your phone)...")
     send_2fa_alert()
 
     page.wait_for_url("**/my-account/dashboard**", timeout=300000)
