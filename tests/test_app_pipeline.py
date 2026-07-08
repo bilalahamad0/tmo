@@ -416,21 +416,29 @@ def test_zelle_sent_unconfirmed_flags_for_manual_review(pipeline, monkeypatch):
     assert "zelle_confirmed_at" not in st
 
 
-def test_zelle_sent_with_empty_confirmation_id_is_unconfirmed(pipeline, monkeypatch):
-    """A 'sent' status with no confirmation_id is treated as unconfirmed - it
-    must not falsely mark the month paid."""
+def test_zelle_sent_banner_only_marks_paid(pipeline, monkeypatch):
+    """A 'sent' status with no reference number - BoA showed the 'payment sent'
+    banner but the id couldn't be scraped - is a SUCCESS. zelle_pay already
+    decided the payment went through, so app.py marks the month paid (which
+    also hard-locks against a duplicate payment) and emails the confirmation
+    instead of firing a false 'unconfirmed' alarm."""
     monkeypatch.setenv("ZELLE_LIVE_SEND", "1")
     pipeline.trigger_zelle.return_value = {
         "status": "sent",
         "confirmation_id": None,
-        "screenshot": "zelle_review_x.png",
+        "payment_sent": True,
+        "screenshot": "zelle_confirmation_x.png",
         "recipient_name": "Real Recipient",
     }
 
     rc = app._run_pipeline(YM, pipeline.fake_pdf, force=False)
 
-    assert rc == 6
-    pipeline.send_confirmation.assert_not_called()
+    assert rc == 0
+    pipeline.send_failure.assert_not_called()
+    pipeline.send_confirmation.assert_called_once()
+    assert pipeline.send_confirmation.call_args.kwargs["confirmation_id"] is None
+
     st = _state()
-    assert st["zelle_unconfirmed_at"]
-    assert "zelle_confirmed_at" not in st
+    assert st["zelle_confirmed_at"]
+    assert st.get("zelle_confirmation_id") is None
+    assert "zelle_unconfirmed_at" not in st

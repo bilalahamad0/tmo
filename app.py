@@ -485,21 +485,28 @@ def _run_pipeline(
         "ZELLE_RECIPIENT_NAME", "ZELLE_RECIPIENT_NAME"
     )
 
-    # The live Pay click happened but no confirmation ID was captured. The
-    # money may or may not have moved, so do NOT write zelle_confirmed_at
-    # (that would falsely lock the month as paid with no proof). Flag it for
-    # manual verification and alert. zelle_attempted_at is already set, so
-    # the safety gate refuses any AUTOMATIC retry - a human must check Bank
-    # of America, then either delete the state file (to retry) or treat it
-    # as paid.
-    if status == "sent_unconfirmed" or not confirmation_id:
+    # 'sent_unconfirmed': the live Pay click happened but zelle_pay saw NEITHER
+    # a confirmation id NOR BoA's 'payment sent' banner. The money may or may
+    # not have moved, so do NOT write zelle_confirmed_at (that would falsely
+    # lock the month as paid with no proof). Flag it for manual verification
+    # and alert. zelle_attempted_at is already set, so the safety gate refuses
+    # any AUTOMATIC retry - a human must check Bank of America, then either
+    # delete the state file (to retry) or treat it as paid.
+    #
+    # NOTE: we branch on status ALONE, not on `not confirmation_id`. When BoA
+    # shows "Your payment is sent." but the reference number can't be scraped,
+    # zelle_pay returns status='sent' with confirmation_id=None - a SUCCESS, not
+    # a failure. Conflating the two here is what fired a false 'zelle_unconfirmed'
+    # alert on a payment that had actually gone through.
+    if status == "sent_unconfirmed":
         st = state_mod.update_state(
             year_month,
             zelle_unconfirmed_at=state_mod.now_iso(),
             zelle_screenshot=screenshot,
         )
         msg = (
-            "Zelle Pay was clicked but NO confirmation ID was captured. The "
+            "Zelle Pay was clicked but NO confirmation of the payment could be "
+            "captured (no reference number and no 'payment sent' banner). The "
             "payment may or may not have completed - MANUAL verification in "
             "Bank of America is required before the next run. Automatic retry "
             "is blocked to avoid a double payment. To retry after confirming "
@@ -512,13 +519,25 @@ def _run_pipeline(
         )
         return 6
 
+    # status == 'sent': the payment is confirmed sent - via a captured
+    # confirmation id and/or BoA's 'payment sent' banner. A missing reference
+    # number is not a failure; marking the month paid also HARD-LOCKS it
+    # against a duplicate payment on the next run (zelle_confirmation_id may be
+    # None here, which dashboard.py renders as 'PAID (no confirmation id)').
     st = state_mod.update_state(
         year_month,
         zelle_confirmed_at=state_mod.now_iso(),
         zelle_confirmation_id=confirmation_id,
         zelle_screenshot=screenshot,
     )
-    print(f"Zelle send succeeded. Confirmation: {confirmation_id}")
+    if confirmation_id:
+        print(f"Zelle send succeeded. Confirmation: {confirmation_id}")
+    else:
+        print(
+            "Zelle send succeeded (BoA 'payment sent' banner detected; "
+            "reference number not captured). Marked paid to prevent a "
+            "duplicate payment."
+        )
 
     # Stage 7: confirmation email
     print("Stage 7: Sending confirmation email...")

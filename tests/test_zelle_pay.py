@@ -78,6 +78,153 @@ def test_confirmation_pattern_returns_none_when_absent():
     assert _match_confirmation("Payment is on its way. Thank you.") is None
 
 
+def test_extract_confirmation_id_from_real_boa_success_text():
+    """Regression: the real BoA success page renders the label and the id in
+    separate DOM nodes, so the scraped text is 'Confirmation #\\ns1xrlf1ab'.
+    This exact payment was falsely reported 'unconfirmed' in production."""
+    scraped = (
+        "Success\nYour payment is sent.\nTo\nSachin Rath\n"
+        "sachinbubun@gmail.com | Enrolled as SACHIN RATH\nFrom\n"
+        "Adv Plus Banking - 9348\nAmount\n$89.17\nDate\nJul 07, 2026\n"
+        "Confirmation #\ns1xrlf1ab\nSend another payment\nGo to Activity"
+    )
+    assert zelle_pay._extract_confirmation_id(scraped) == "s1xrlf1ab"
+
+
+def test_extract_confirmation_id_none_on_empty():
+    assert zelle_pay._extract_confirmation_id("") is None
+    assert zelle_pay._extract_confirmation_id("Review your payment") is None
+
+
+# --------------------------------------------------------------------------
+# _payment_sent: BoA's 'payment sent' banner is a first-class success signal,
+# independent of whether the reference number could be scraped.
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Your payment is sent.",          # the real BoA web banner
+        "your payment is sent",           # case-insensitive
+        "Your payment was sent",
+        "Your payment has been sent",
+        "Payment successfully sent",
+        "Your money is on its way",
+    ],
+)
+def test_payment_sent_detects_success_banner(text):
+    assert zelle_pay._payment_sent(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "Review your payment",
+        "Pay $89.17 to Sachin Rath",   # the Review-screen action button label
+        "Enter an amount to send",
+    ],
+)
+def test_payment_sent_false_on_non_success(text):
+    assert zelle_pay._payment_sent(text) is False
+
+
+# --------------------------------------------------------------------------
+# _classify_send: id OR banner -> 'sent'; neither -> 'sent_unconfirmed'
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "confirmation_id,payment_sent,expected",
+    [
+        ("s1xrlf1ab", True, "sent"),           # both signals
+        ("s1xrlf1ab", False, "sent"),          # reference number alone
+        (None, True, "sent"),                  # success banner alone
+        (None, False, "sent_unconfirmed"),     # neither -> ambiguous
+    ],
+)
+def test_classify_send(confirmation_id, payment_sent, expected):
+    assert zelle_pay._classify_send(confirmation_id, payment_sent) == expected
+
+
+# --------------------------------------------------------------------------
+# _read_confirmation: reads the id/banner from the (iframe) DOM. The id and
+# banner come from inner_text; text_content is a tightly-gated fallback that
+# can only flip payment_sent, never store a (possibly mangled) id.
+# --------------------------------------------------------------------------
+
+class _FakeLocator:
+    def __init__(self, inner, content):
+        self._inner, self._content = inner, content
+
+    def inner_text(self, timeout=None):
+        if self._inner is None:
+            raise RuntimeError("inner_text unavailable")
+        return self._inner
+
+    def text_content(self, timeout=None):
+        if self._content is None:
+            raise RuntimeError("text_content unavailable")
+        return self._content
+
+
+class _FakeFrame:
+    def __init__(self, inner, content):
+        self._loc = _FakeLocator(inner, content)
+
+    def locator(self, _selector):
+        return self._loc
+
+
+class _FakePage:
+    """Frame 0 is the (empty) main frame; frame 1 is BoA's Zelle iframe."""
+    def __init__(self, inner, content):
+        self.frames = [_FakeFrame("", ""), _FakeFrame(inner, content)]
+
+
+def test_read_confirmation_clean_success_page():
+    """inner_text renders block elements as newlines -> id parses cleanly and
+    the banner is detected."""
+    inner = (
+        "Success\nYour payment is sent.\nAmount\n$89.17\n"
+        "Confirmation #\ns1xrlf1ab\nGo to Activity"
+    )
+    cid, sent = zelle_pay._read_confirmation(_FakePage(inner, "ignored"))
+    assert cid == "s1xrlf1ab"
+    assert sent is True
+
+
+def test_read_confirmation_banner_without_id():
+    cid, sent = zelle_pay._read_confirmation(
+        _FakePage("Your payment is sent.", "ignored")
+    )
+    assert cid is None
+    assert sent is True
+
+
+def test_read_confirmation_falls_back_to_text_content_when_inner_empty():
+    """When inner_text is unreadable (None) the mashed text_content still proves
+    a send happened -> payment_sent True, but NO mangled id is stored."""
+    mashed = (
+        "SuccessYour payment is sent.Amount$89.17"
+        "Confirmation #s1xrlf1abSend another payment"
+    )
+    cid, sent = zelle_pay._read_confirmation(_FakePage(None, mashed))
+    assert sent is True
+    # The id would mangle to 's1xrlf1abSend' from text_content, so we store none.
+    assert cid is None
+
+
+def test_read_confirmation_does_not_use_text_content_when_inner_readable():
+    """If inner_text returns real (non-success) text, the text_content fallback
+    must stay OFF - otherwise a stray/hidden 'Confirmation #' could falsely mark
+    a payment sent. Ambiguous -> (None, False) -> sent_unconfirmed upstream."""
+    cid, sent = zelle_pay._read_confirmation(
+        _FakePage("Review your payment", "Confirmation #hidden999")
+    )
+    assert cid is None
+    assert sent is False
+
+
 # --------------------------------------------------------------------------
 # REVIEW_ACTION_PATTERN: identify the final Pay/Send button exactly
 # --------------------------------------------------------------------------
