@@ -445,8 +445,29 @@ def _run_pipeline(
     ok, reason = _zelle_safety_gate(special_amount, st, force=force)
     if not ok:
         print(f"Zelle safety gate: {reason}")
-        if special_amount > 0 and not st.get("zelle_confirmed_at"):
+        # A month stuck "attempted but unconfirmed" re-hits this gate on every
+        # run of days 6-10. Alert about that limbo at most ONCE: the first
+        # failure (the Stage 6 zelle_unconfirmed alert, or the first zelle_gate
+        # here) already told the human to verify in BoA and how to unblock.
+        # Re-sending the same alert every day is noise, not new information.
+        # Other block reasons (over-cap, misconfigured recipient) keep alerting
+        # each run - those signal a config problem a human still has to fix.
+        blocked_unconfirmed = bool(
+            st.get("zelle_attempted_at") and not st.get("zelle_confirmed_at")
+        )
+        already_notified = bool(
+            st.get("zelle_unconfirmed_at") or st.get("zelle_gate_alerted_at")
+        )
+        if (
+            special_amount > 0
+            and not st.get("zelle_confirmed_at")
+            and not (blocked_unconfirmed and already_notified)
+        ):
             notify.send_failure_alert("zelle_gate", reason)
+            if blocked_unconfirmed:
+                st = state_mod.update_state(
+                    year_month, zelle_gate_alerted_at=state_mod.now_iso()
+                )
         return 0
 
     # Stage 6: Zelle send (live or dry-run)
