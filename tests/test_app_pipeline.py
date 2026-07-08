@@ -247,6 +247,55 @@ def test_attempted_without_confirm_blocks_without_force(pipeline):
     assert pipeline.send_failure.call_args[0][0] == "zelle_gate"
 
 
+def test_gate_does_not_realert_when_already_flagged_unconfirmed(pipeline):
+    """A month already flagged 'unconfirmed' at Stage 6 (the human was told to
+    verify in BoA) must stay blocked but NOT re-send zelle_gate on every
+    subsequent run - that repeat is noise, not new information."""
+    state_mod.save_state(
+        YM,
+        {
+            "zelle_attempted_at": "2026-05-07T13:00:00",
+            "zelle_unconfirmed_at": "2026-05-07T13:01:00",
+        },
+    )
+
+    rc = app._run_pipeline(YM, pipeline.fake_pdf, force=False)
+
+    assert rc == 0
+    pipeline.trigger_zelle.assert_not_called()
+    pipeline.send_failure.assert_not_called()
+
+
+def test_gate_alerts_once_then_suppresses_for_bare_attempt(pipeline):
+    """A bare stuck attempt (e.g. crash mid-Zelle) alerts on the FIRST blocked
+    run and records it, then stays silent on later runs for the same state."""
+    state_mod.save_state(YM, {"zelle_attempted_at": "2026-05-07T13:00:00"})
+
+    rc1 = app._run_pipeline(YM, pipeline.fake_pdf, force=False)
+    assert rc1 == 0
+    assert pipeline.send_failure.call_count == 1
+    assert _state().get("zelle_gate_alerted_at")
+
+    rc2 = app._run_pipeline(YM, pipeline.fake_pdf, force=False)
+    assert rc2 == 0
+    # Still just the one alert from the first run - no daily repeats.
+    assert pipeline.send_failure.call_count == 1
+
+
+def test_over_cap_keeps_alerting_each_run(pipeline):
+    """Config-style blocks (over-cap) are NOT deduped - they recur until fixed,
+    so each run should still surface them."""
+    pipeline.config["ZELLE_AMOUNT_CAP"] = "50"  # bill special is 102.43
+
+    app._run_pipeline(YM, pipeline.fake_pdf, force=False)
+    app._run_pipeline(YM, pipeline.fake_pdf, force=False)
+
+    assert pipeline.send_failure.call_count == 2
+    assert all(
+        c.args[0] == "zelle_gate" for c in pipeline.send_failure.call_args_list
+    )
+
+
 # --------------------------------------------------------------------------
 # Failure routing
 # --------------------------------------------------------------------------
