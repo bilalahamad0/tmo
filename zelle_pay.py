@@ -1,8 +1,14 @@
 """BoA Zelle automation. Emits a JSON result on the LAST stdout line:
 
-  {"status": "sent", "confirmation_id": "...", "screenshot": "...", "recipient_name": "..."}
+  {"status": "sent", "confirmation_id": "...", "payment_sent": true, "screenshot": "...", "recipient_name": "..."}
+  {"status": "sent_unconfirmed", "confirmation_id": null, "payment_sent": false, "screenshot": "...", "recipient_name": "..."}
   {"status": "dry_run", "screenshot": "..."}    # ZELLE_LIVE_SEND != "1"
   {"status": "error", "error": "...", "screenshot": "..."}
+
+"sent" means the payment went through - proven by a captured confirmation id
+AND/OR BoA's "Your payment is sent." banner. "sent_unconfirmed" means Pay was
+clicked but NEITHER signal was seen, so a human must verify in Bank of America
+before the next run (blocks auto-retry to avoid a double payment).
 
 The orchestrator (app.py) parses that JSON to decide next steps.
 
@@ -45,6 +51,51 @@ CONFIRMATION_PATTERNS = [
     ),
 ]
 BROWSER_PROFILE_DIR = os.path.expanduser("~/.tmo_browser_profile")
+
+# BoA's Zelle success page shows a "Your payment is sent." banner separately
+# from the "Confirmation #" reference number. That banner is an independent,
+# first-class proof the money moved - so a run where we can read the banner but
+# not scrape the reference number is a SUCCESS, not a "maybe it failed". Kept
+# specific (each phrase only appears on a completed send, never on Review) so
+# it can't false-positive the earlier steps of the flow.
+SUCCESS_PATTERNS = re.compile(
+    r"your\s+payment\s+is\s+sent"
+    r"|payment\s+(?:is|has\s+been|was)\s+sent"
+    r"|successfully\s+sent"
+    r"|(?:payment|money)\s+is\s+on\s+its\s+way"
+    r"|money\s+(?:has\s+been\s+)?sent",
+    re.IGNORECASE,
+)
+
+
+def _extract_confirmation_id(text: str) -> str | None:
+    """First CONFIRMATION_PATTERNS match in `text`, or None."""
+    if not text:
+        return None
+    for pat in CONFIRMATION_PATTERNS:
+        m = pat.search(text)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _payment_sent(text: str) -> bool:
+    """True if `text` contains BoA's 'payment sent' success banner.
+
+    Fed the page's RENDERED (visible) text only, so a hidden success template
+    in the DOM can never trip it into a false positive.
+    """
+    return bool(text) and SUCCESS_PATTERNS.search(text) is not None
+
+
+def _classify_send(confirmation_id: str | None, payment_sent: bool) -> str:
+    """Map capture results to a status.
+
+    A payment is 'sent' when we have EITHER a confirmation id OR BoA's explicit
+    'payment sent' banner. Only when we have NEITHER is the outcome genuinely
+    ambiguous ('sent_unconfirmed') and worth a human's manual verification.
+    """
+    return "sent" if (confirmation_id or payment_sent) else "sent_unconfirmed"
 
 
 def _emit(result: dict) -> None:
@@ -315,92 +366,122 @@ def _fill_amount(page, amount: str) -> bool:
     return False
 
 
-def _capture_confirmation(page) -> tuple[str | None, str]:
-    """After clicking Pay/Send, wait for the confirmation page to render,
-    then capture the confirmation ID and a screenshot.
+def _gather_frame_text(page) -> tuple[str, str]:
+    """Return (visible_text, raw_text) aggregated across EVERY frame.
 
-    Returns (confirmation_id, screenshot_path).
+    BoA renders the whole Zelle UI - and the "Confirmation #" - inside an
+    iframe, so the main frame's body text never contains the id.
 
-    The previous implementation took the screenshot before the confirmation
-    page fully rendered, so the ID was never captured. We now:
-    1. Wait for the Pay/Send button to disappear (means we left Review)
-    2. Wait for confirmation-text indicators to appear in the DOM
-    3. Sleep an extra 4s for any deferred content
-    4. Try multiple confirmation-ID patterns
+    - visible_text = inner_text() (rendered; hidden nodes excluded). The TRUSTED
+      source for both the reference number and the 'payment sent' banner.
+    - raw_text = text_content() (raw DOM text; layout-independent). A fallback
+      that stays readable even when inner_text() on the BoA iframe comes back
+      empty right after the send. It is deliberately NOT used to store a
+      reference number: text_content drops inter-element whitespace, so an id
+      can run into the next element's text ('s1xrlf1ab' + 'Send' ->
+      's1xrlf1abSend'). It only ever flips payment_sent -> True.
+    """
+    visible_parts: list[str] = []
+    raw_parts: list[str] = []
+    for fr in page.frames:
+        try:
+            vis = fr.locator("body").inner_text(timeout=3000)
+            if vis:
+                visible_parts.append(vis)
+        except Exception:
+            pass
+        try:
+            raw = fr.locator("body").text_content(timeout=3000)
+            if raw:
+                raw_parts.append(raw)
+        except Exception:
+            pass
+    return "\n".join(visible_parts), "\n".join(raw_parts)
+
+
+def _read_confirmation(page) -> tuple[str | None, bool]:
+    """One read of the confirmation state: (confirmation_id, payment_sent).
+
+    The id and the banner both come from inner_text (clean, hidden nodes
+    excluded). text_content is consulted ONLY when inner_text is entirely empty
+    across every frame - the pathological 'iframe body unreadable via layout'
+    case - and then only to conclude a send completed, never to store a
+    possibly-mangled id.
+    """
+    visible_text, raw_text = _gather_frame_text(page)
+    confirmation_id = _extract_confirmation_id(visible_text)
+    payment_sent = _payment_sent(visible_text)
+    if not confirmation_id and not payment_sent and not visible_text.strip():
+        if _extract_confirmation_id(raw_text) or _payment_sent(raw_text):
+            payment_sent = True
+    return confirmation_id, payment_sent
+
+
+def _capture_confirmation(page) -> tuple[str | None, bool, str]:
+    """After clicking Pay/Send, wait for the confirmation page, then capture
+    the confirmation ID and whether BoA showed its 'payment sent' banner.
+
+    Returns (confirmation_id, payment_sent, screenshot_path).
+
+    A missing reference number is NOT treated as a possible failure when the
+    banner (and BoA's own confirmation email) prove the money moved - that
+    false alarm is exactly what made a clean run look broken.
+
+    We poll every frame until either a confirmation id or the success banner
+    appears, then screenshot. This replaces the old main-frame-only waits,
+    which never saw the iframe content and just burned ~20s doing nothing; the
+    per-iteration re-read of page.frames also dodges the stale-frame races that
+    made a single post-send inner_text() read come back empty.
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     screenshot = f"zelle_confirmation_{timestamp}.png"
     confirmation_id = None
+    payment_sent = False
 
     print("Waiting for Zelle confirmation page to render...")
-    # Step 1: wait for Pay/Send button to be gone
-    try:
-        page.wait_for_function(
-            """() => {
-                const btns = Array.from(document.querySelectorAll('button'));
-                return !btns.some(b => /^(Pay|Send|Send Now)$/i.test(
-                    (b.textContent || '').trim()
-                ));
-            }""",
-            timeout=30000,
-        )
-    except Exception:
-        print("Pay/Send button still visible after 30s; proceeding anyway.")
+    for _ in range(15):  # ~30s of polling, with early break
+        confirmation_id, payment_sent = _read_confirmation(page)
+        if confirmation_id or payment_sent:
+            print(
+                f"Confirmation detected (id={confirmation_id!r}, "
+                f"payment_sent={payment_sent})."
+            )
+            break
+        time.sleep(2)
 
-    # Step 2: wait for confirmation indicators
+    # Let deferred content settle, then screenshot the final rendered state.
     try:
-        page.wait_for_selector(
-            "text=/Confirmation\\s*#|confirmation\\s+number|"
-            "payment\\s+sent|successfully\\s+sent|"
-            "money\\s+(?:has\\s+been\\s+)?sent|on\\s+its\\s+way/i",
-            timeout=20000,
-        )
-        print("Confirmation page indicators visible.")
-    except Exception:
-        print("No confirmation text appeared in 20s; capturing anyway.")
-
-    # Step 3: extra settling time
-    time.sleep(4)
-    try:
-        page.wait_for_load_state("networkidle", timeout=15000)
+        page.wait_for_load_state("networkidle", timeout=10000)
     except Exception:
         pass
-
-    # Step 4: screenshot AFTER the page has settled
     try:
         page.screenshot(path=screenshot, full_page=True)
     except Exception as e:
         print(f"Could not screenshot confirmation page: {e}")
         screenshot = ""
 
-    # Step 5: try multiple ID patterns across the main page AND every iframe.
-    # BoA renders the Zelle send/confirmation UI - and the "Confirmation #" -
-    # inside an iframe, so the main-frame body text alone never contained the
-    # ID (the previous capture only read page.locator("body"), which is why a
-    # genuinely successful payment was reported as sent_unconfirmed).
-    try:
-        texts = []
-        for fr in page.frames:
-            try:
-                texts.append(fr.locator("body").inner_text(timeout=5000))
-            except Exception:
-                continue
-        body_text = "\n".join(texts)
-        for pat in CONFIRMATION_PATTERNS:
-            m = pat.search(body_text)
-            if m:
-                confirmation_id = m.group(1)
-                print(f"Captured confirmation id: {confirmation_id}")
-                break
-        if not confirmation_id:
-            print(
-                f"No confirmation ID pattern matched across {len(texts)} "
-                f"frame(s). First 400 chars:\n{body_text[:400]}"
-            )
-    except Exception as e:
-        print(f"Could not read confirmation text: {e}")
+    # Final read after settling - the reference number sometimes renders a beat
+    # after the success banner does.
+    cid2, sent2 = _read_confirmation(page)
+    confirmation_id = confirmation_id or cid2
+    payment_sent = payment_sent or sent2
 
-    return confirmation_id, screenshot
+    if confirmation_id:
+        print(f"Captured confirmation id: {confirmation_id}")
+    elif payment_sent:
+        print(
+            "No confirmation id parsed, but BoA showed its 'payment sent' "
+            "banner - treating the payment as sent."
+        )
+    else:
+        visible_text, raw_text = _gather_frame_text(page)
+        print(
+            "Neither a confirmation id nor a 'payment sent' banner was found.\n"
+            f"Visible text (first 300): {visible_text[:300]!r}\n"
+            f"Raw text (first 300): {raw_text[:300]!r}"
+        )
+
+    return confirmation_id, payment_sent, screenshot
 
 
 def handle_boa_zelle(amount: str) -> dict:
@@ -730,15 +811,18 @@ def handle_boa_zelle(amount: str) -> dict:
             action_btn.wait_for(state="visible", timeout=15000)
             action_btn.click()
 
-            confirmation_id, screenshot = _capture_confirmation(page)
+            confirmation_id, payment_sent, screenshot = _capture_confirmation(
+                page
+            )
             context.close()
 
-            # If the Pay click succeeded but no confirmation ID could be
-            # captured, report a DISTINCT status so app.py flags the month for
-            # manual verification instead of silently marking it paid.
+            # 'sent' when we have a confirmation id AND/OR BoA's 'payment sent'
+            # banner. Only 'sent_unconfirmed' (NEITHER signal) tells app.py to
+            # flag the month for manual verification instead of marking it paid.
             return {
-                "status": "sent" if confirmation_id else "sent_unconfirmed",
+                "status": _classify_send(confirmation_id, payment_sent),
                 "confirmation_id": confirmation_id,
+                "payment_sent": payment_sent,
                 "screenshot": screenshot,
                 "recipient_name": recipient_name,
             }
