@@ -572,10 +572,91 @@ def _run_pipeline(
     return 0
 
 
+def _mark_paid_cli(args: list[str]) -> int:
+    """Reconcile a month as PAID without re-running the pipeline.
+
+    Usage: app.py --mark-paid [CONFIRMATION_ID] [--month YYYY-MM]
+
+    For a bill whose Zelle payment genuinely went through but whose state is
+    stuck 'attempted but unconfirmed' (e.g. BoA showed success but the
+    reference number couldn't be scraped). Writes zelle_confirmed_at - the hard
+    lock that stops any re-payment - and clears the limbo flags so the safety
+    gate and dashboard see a clean paid month.
+
+    This is the SAFE alternative to deleting the state file: deleting makes the
+    month look unprocessed, so the NEXT run would pay again. --mark-paid records
+    that the payment already happened and blocks that.
+    """
+    year_month = state_mod.current_year_month()
+    if "--month" in args:
+        i = args.index("--month")
+        if i + 1 >= len(args):
+            print("Error: --month requires a YYYY-MM value.")
+            return 2
+        year_month = args[i + 1]
+        if not re.fullmatch(r"\d{4}-\d{2}", year_month):
+            print(f"Error: --month must be YYYY-MM, got {year_month!r}.")
+            return 2
+        args = args[:i] + args[i + 2:]
+
+    idx = args.index("--mark-paid")
+    confirmation_id = None
+    if idx + 1 < len(args) and not args[idx + 1].startswith("--"):
+        confirmation_id = args[idx + 1]
+
+    with state_mod.month_lock(year_month) as acquired:
+        if not acquired:
+            print(
+                f"Another run is processing {year_month} right now; "
+                f"re-run --mark-paid once it finishes."
+            )
+            return 0
+
+        st = state_mod.load_state(year_month)
+        if st.get("zelle_confirmed_at"):
+            print(
+                f"{year_month} is already marked paid at "
+                f"{st['zelle_confirmed_at']} "
+                f"(id={st.get('zelle_confirmation_id')!r}). Nothing to do."
+            )
+            return 0
+
+        prior = (
+            "no existing state file"
+            if not st
+            else (
+                f"attempted_at={st.get('zelle_attempted_at')!r}, "
+                f"unconfirmed_at={st.get('zelle_unconfirmed_at')!r}"
+            )
+        )
+        st["zelle_confirmed_at"] = state_mod.now_iso()
+        st["zelle_confirmation_id"] = confirmation_id
+        # Audit breadcrumb: this month was reconciled by a human, not confirmed
+        # automatically by a live send.
+        st["zelle_reconciled_at"] = st["zelle_confirmed_at"]
+        # Clear the limbo flags so the gate/dashboard see a clean paid month.
+        st.pop("zelle_unconfirmed_at", None)
+        st.pop("zelle_gate_alerted_at", None)
+        state_mod.save_state(year_month, st)
+
+    print(
+        f"Marked {year_month} PAID (confirmation_id={confirmation_id!r}). "
+        f"Prior state: {prior}. Future runs will skip payment for this month, "
+        f"and the hard lock now prevents any re-payment."
+    )
+    return 0
+
+
 def main() -> int:
+    args = sys.argv[1:]
+
+    # Reconcile path: mark a month PAID without running the pipeline. Handled
+    # first so it never launches a browser, reads SMS, or triggers a payment.
+    if "--mark-paid" in args:
+        return _mark_paid_cli(args)
+
     print("Starting T-Mobile Local Bill Processor (stage-aware)...")
 
-    args = sys.argv[1:]
     force = "--force" in args
     args = [a for a in args if a != "--force"]
     explicit_pdf = args[0] if args else None

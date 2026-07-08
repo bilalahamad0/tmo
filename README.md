@@ -189,6 +189,12 @@ Both T-Mobile and BoA cache "trust this device" cookies in `~/.tmo_browser_profi
 # zelle_confirmed_at gate is NEVER bypassed - delete state file to truly reset.
 ./tmobile_env/bin/python app.py --force
 
+# Reconcile a month that ACTUALLY paid but got stuck 'attempted/unconfirmed'
+# (e.g. BoA showed success but the confirmation number couldn't be scraped).
+# Writes zelle_confirmed_at and clears the limbo flags; does NOT re-pay. The
+# safe alternative to deleting the state file, which would pay again.
+./tmobile_env/bin/python app.py --mark-paid <confirmation_id> [--month YYYY-MM]
+
 # Just download (no parse/email/Zelle)
 ./tmobile_env/bin/python download_bill.py
 
@@ -246,7 +252,7 @@ Located at `~/.tmo_state/bill_<YYYY-MM>.json`. Stage progression:
 **Idempotency rules:**
 
 - `zelle_confirmed_at` is the hard lock. Once set, even `--force` cannot trigger another payment for that month. The only way to bypass is `rm ~/.tmo_state/bill_<YYYY-MM>.json`.
-- `zelle_attempted_at` set without `zelle_confirmed_at` (e.g. crash mid-flow) blocks future runs and sends an alert. Manual review required — verify in the BoA app whether the payment actually went through, then either delete state (didn't go through) or set `zelle_confirmed_at` manually (did go through).
+- `zelle_attempted_at` set without `zelle_confirmed_at` (e.g. crash mid-flow, or a send whose confirmation couldn't be scraped) blocks future runs and alerts **once** (the `zelle_gate` alert is deduped per month). Verify in the BoA app whether the payment actually went through, then reconcile: if it **did**, `app.py --mark-paid <confirmation_id>` (records it and keeps the re-payment lock); if it **didn't**, `rm ~/.tmo_state/bill_<YYYY-MM>.json` to allow a fresh attempt. Deleting a month that *did* pay causes a double payment — prefer `--mark-paid`.
 
 ---
 
