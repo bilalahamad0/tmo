@@ -297,6 +297,76 @@ def test_over_cap_keeps_alerting_each_run(pipeline):
 
 
 # --------------------------------------------------------------------------
+# --mark-paid: reconcile a genuinely-paid-but-stuck month (the SAFE
+# alternative to deleting the state file, which would re-pay).
+# --------------------------------------------------------------------------
+
+def test_mark_paid_reconciles_stuck_month(state_dir):
+    state_mod.save_state(
+        YM,
+        {
+            "zelle_attempted_at": "2026-05-07T13:00:00",
+            "zelle_unconfirmed_at": "2026-05-07T13:01:00",
+            "zelle_gate_alerted_at": "2026-05-08T09:00:00",
+        },
+    )
+
+    rc = app._mark_paid_cli(["--mark-paid", "s1xrlf1ab", "--month", YM])
+
+    assert rc == 0
+    st = _state()
+    assert st["zelle_confirmed_at"]
+    assert st["zelle_confirmation_id"] == "s1xrlf1ab"
+    assert st["zelle_reconciled_at"] == st["zelle_confirmed_at"]
+    # Limbo flags cleared so the gate/dashboard see a clean paid month.
+    assert "zelle_unconfirmed_at" not in st
+    assert "zelle_gate_alerted_at" not in st
+
+
+def test_mark_paid_without_id_records_paid_no_id(state_dir):
+    state_mod.save_state(YM, {"zelle_attempted_at": "2026-05-07T13:00:00"})
+
+    rc = app._mark_paid_cli(["--mark-paid", "--month", YM])
+
+    assert rc == 0
+    st = _state()
+    assert st["zelle_confirmed_at"]
+    assert st["zelle_confirmation_id"] is None
+
+
+def test_mark_paid_is_noop_when_already_confirmed(state_dir):
+    """Never overwrite a month that's already paid - preserve the original id."""
+    state_mod.save_state(
+        YM,
+        {
+            "zelle_confirmed_at": "2026-05-07T13:05:00",
+            "zelle_confirmation_id": "ORIG123",
+        },
+    )
+
+    rc = app._mark_paid_cli(["--mark-paid", "NEW999", "--month", YM])
+
+    assert rc == 0
+    assert _state()["zelle_confirmation_id"] == "ORIG123"
+
+
+def test_mark_paid_rejects_bad_month(state_dir):
+    assert app._mark_paid_cli(["--mark-paid", "s1xrlf1ab", "--month", "July"]) == 2
+
+
+def test_mark_paid_then_normal_run_skips_and_is_silent(pipeline):
+    """After reconciling, a normal run treats the month as already paid: no
+    Zelle attempt and no alert."""
+    app._mark_paid_cli(["--mark-paid", "s1xrlf1ab", "--month", YM])
+
+    rc = app._run_pipeline(YM, pipeline.fake_pdf, force=False)
+
+    assert rc == 0
+    pipeline.trigger_zelle.assert_not_called()
+    pipeline.send_failure.assert_not_called()
+
+
+# --------------------------------------------------------------------------
 # Failure routing
 # --------------------------------------------------------------------------
 

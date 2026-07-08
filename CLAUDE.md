@@ -38,6 +38,13 @@ python3 -m venv tmobile_env
 # Does NOT bypass the hard zelle_confirmed_at lock.
 ./tmobile_env/bin/python app.py --force
 
+# Reconcile a month that ACTUALLY paid but got stuck 'attempted/unconfirmed'
+# (writes zelle_confirmed_at + clears the limbo flags; does NOT re-pay).
+# The safe alternative to deleting the state file, which would pay again.
+./tmobile_env/bin/python app.py --mark-paid <confirmation_id>
+./tmobile_env/bin/python app.py --mark-paid <confirmation_id> --month 2026-07
+./tmobile_env/bin/python app.py --mark-paid            # paid, but no id to record
+
 # Run a sub-stage in isolation
 ./tmobile_env/bin/python download_bill.py
 ./tmobile_env/bin/python zelle_pay.py 75.00     # respects ZELLE_LIVE_SEND
@@ -72,7 +79,7 @@ python3 -m venv tmobile_env
 
 - **Full Disk Access (FDA)** must be granted to whatever process spawns Python — `Terminal.app` for manual runs, `/sbin/launchd` for scheduled runs. Without FDA, `chat.db` raises "unable to open database file" and Stage 0 silently reports "no SMS found", which looks like the pipeline correctly skipping.
 - **The hard `zelle_confirmed_at` lock** is intentional. If you need to test a re-run after a successful pay, delete `~/.tmo_state/bill_<YYYY-MM>.json` rather than editing it, unless you know which fields the next stage will read.
-- **A crash mid-Zelle** (after `zelle_attempted_at` but before `zelle_confirmed_at`) blocks subsequent runs and triggers a failure alert — requires manual verification in the BoA UI and a state edit, not a `--force`.
+- **A crash mid-Zelle** (after `zelle_attempted_at` but before `zelle_confirmed_at`) blocks subsequent runs and alerts **once** (the `zelle_gate` alert is deduped per month). Verify in the BoA UI, then reconcile — don't `--force`: if it **did** pay, `app.py --mark-paid <id>` (records it, keeps the re-payment lock); if it **didn't**, `rm ~/.tmo_state/bill_<YYYY-MM>.json` to allow a fresh attempt. Deleting a month that *did* pay causes a double payment.
 - **Confirmation screenshots are not emailed** even on success — they're saved to the repo root only. This is deliberate so BoA UI state never leaves the machine.
 - **`.env` and `~/.tmo_browser_profile/`** are secret-bearing — the profile holds live BoA session cookies. Both are gitignored. Don't put the profile in a syncing folder.
 - The persistent profile occasionally needs to be deleted (`rm -rf ~/.tmo_browser_profile`) if BoA invalidates the "trust this device" cookie — the next run will require fresh MFA and re-establish the cookie.
