@@ -141,20 +141,50 @@ def _login(page, t_user: str) -> None:
             'button:has-text("Next"), button[type="submit"]'
         ).first.click()
 
-    print("Checking for Face ID / Fingerprint option...")
-    f_btn = page.locator(
-        'button:has-text("Continue with Face ID/Fingerprint")'
-    )
-    f_btn.wait_for(state="visible", timeout=15000)
-    f_btn.click()
+    print("Checking for Phone verification / Face ID option...")
+    btn = page.locator(
+        'button:has-text("Continue with Face ID/Fingerprint"), '
+        'button:has-text("Continue")'
+    ).filter(visible=True).first
+    try:
+        btn.wait_for(state="visible", timeout=15000)
+        btn.click()
+        print("Clicked Continue / Phone verification button.")
+    except Exception as e:
+        print(f"Continue button not found: {e}")
 
-    print("Waiting for 'Check the notification' message...")
-    n_msg = page.locator("text=/Check the notification/i")
-    n_msg.wait_for(state="visible", timeout=30000)
+    time.sleep(3)
+    # If 'Log in with password' is present and password field is visible/needed
+    pass_link = page.get_by_role("button", name=re.compile("Log in with password", re.I))
+    if pass_link.count() == 0:
+        pass_link = page.get_by_role("link", name=re.compile("Log in with password", re.I))
+    pass_field = page.locator('input[type="password"]:visible').first
+    if not pass_field.is_visible(timeout=1000) and pass_link.count() > 0 and not page.locator("text=Check the notification").is_visible(timeout=1000):
+        try:
+            print("Clicking 'Log in with password'...")
+            pass_link.first.click()
+            time.sleep(2)
+        except Exception:
+            pass
 
-    print("Sending 2FA alert email...")
-    send_2fa_alert()
+    if pass_field.is_visible(timeout=2000) and t_pass:
+        print("Entering T-Mobile password...")
+        pass_field.fill(t_pass)
+        try:
+            page.locator('button:has-text("Log in"), button[type="submit"]').first.click()
+        except Exception:
+            pass
 
+    print("Waiting for 'Check the notification' message or dashboard redirect...")
+    try:
+        n_msg = page.locator("text=/Check the notification/i, text=/notification/i").filter(visible=True).first
+        if n_msg.is_visible(timeout=10000):
+            print("Detected 2FA notification prompt. Sending 2FA alert email...")
+            send_2fa_alert()
+    except Exception:
+        pass
+
+    print("Waiting up to 5 minutes for approval to reach dashboard...")
     page.wait_for_url("**/my-account/dashboard**", timeout=300000)
     print("Successfully reached the dashboard!")
     _dismiss_cookie_banner(page)

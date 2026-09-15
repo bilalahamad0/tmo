@@ -485,8 +485,8 @@ def _capture_confirmation(page) -> tuple[str | None, bool, str]:
 
 
 def handle_boa_zelle(amount: str) -> dict:
-    user = get_keychain_password("BoA_Username")
-    password = get_keychain_password("BoA_Password")
+    user = get_env_or_keychain("BOA_USERNAME", "BoA_Username")
+    password = get_env_or_keychain("BOA_PASSWORD", "BoA_Password")
     recipient_name = get_env_or_keychain(
         "ZELLE_RECIPIENT_NAME", "ZELLE_RECIPIENT_NAME"
     )
@@ -495,8 +495,10 @@ def handle_boa_zelle(amount: str) -> dict:
         return {
             "status": "error",
             "error": (
-                "Bank credentials missing from Keychain. "
-                "Set BoA_Username and BoA_Password via 'security add-generic-password'."
+                "Bank credentials missing. "
+                "Set BOA_USERNAME and BOA_PASSWORD in .env, or in Keychain via "
+                "'security add-generic-password -s BoA_Username -a \"$USER\" -w <user>' and "
+                "'security add-generic-password -s BoA_Password -a \"$USER\" -w <pass>'."
             ),
         }
     if not recipient_name:

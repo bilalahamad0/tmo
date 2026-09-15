@@ -149,7 +149,8 @@ def test_stage0_exits_when_already_paid(pipeline):
     pipeline.trigger_zelle.assert_not_called()
 
 
-def test_stage0_exits_when_no_sms(pipeline):
+def test_stage0_exits_when_no_sms_before_bill_date(pipeline, monkeypatch):
+    monkeypatch.setattr(app, "_is_bill_available", lambda: False)
     pipeline.find_sms.return_value = None
 
     rc = app._run_pipeline(YM, explicit_pdf=None, force=False)
@@ -158,6 +159,18 @@ def test_stage0_exits_when_no_sms(pipeline):
     pipeline.find_sms.assert_called_once()
     pipeline.download.assert_not_called()
     pipeline.parse_bill.assert_not_called()
+
+
+def test_stage0_triggers_when_bill_available_past_date_without_sms(pipeline, monkeypatch):
+    monkeypatch.setattr(app, "_is_bill_available", lambda: True)
+    pipeline.find_sms.return_value = None
+
+    rc = app._run_pipeline(YM, explicit_pdf=None, force=False)
+
+    assert rc == 0
+    pipeline.find_sms.assert_called_once()
+    pipeline.download.assert_called_once()
+    pipeline.parse_bill.assert_called_once()
 
 
 def test_stage0_records_sms_then_downloads_and_proceeds(pipeline):

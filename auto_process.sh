@@ -6,10 +6,9 @@
 # The pipeline is safe to re-run on every scheduled day - it will exit early
 # if the bill isn't posted yet, was already processed, or Zelle is already paid.
 
-# REPO_DIR can be overridden via env. Defaults to a sibling of $HOME.
-# When run by launchd, set the desired path via the LaunchAgent's
-# EnvironmentVariables key, or by editing the line below.
-REPO_DIR="${TMO_REPO_DIR:-$HOME/git_repo/tmo}"
+# REPO_DIR can be overridden via env. Defaults to directory of this script.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="${TMO_REPO_DIR:-$SCRIPT_DIR}"
 PYTHON_PATH="${TMO_PYTHON:-$REPO_DIR/tmobile_env/bin/python}"
 LOG_FILE="$REPO_DIR/automation.log"
 
