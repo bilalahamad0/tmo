@@ -26,6 +26,22 @@ SAMPLE_TMO_SMS_MONTHLY = (
     "using the credit card ending in 2176. You can update your AutoPay..."
 )
 
+# Real verified RCS message observed in September 2026 (delivered via
+# t-mobile_notifications_5lzgs0af_agent@rbm.goog): omits the "T-Mobile: " prefix.
+SAMPLE_TMO_RCS_SEPTEMBER = (
+    "Your monthly bill for account XXXXX6522 is ready. "
+    "Your AutoPay withdrawal for $188.94 is scheduled for 09/23/2026 "
+    "using the Visa ending in 2176. You can update your AutoPay payment method, "
+    "check your monthly savings, manage your benefits, and more, all in T-Life. "
+    "Get more details at: https://secure.t-mobile.com/uP4DguCLF1b"
+)
+
+SAMPLE_TMO_AVAILABLE = (
+    "T-Mobile: Your monthly bill for account XXXXX6522 is available. "
+    "Your AutoPay withdrawal for $188.94 is scheduled for 09/23/2026 "
+    "using the Visa ending in 2176. Check out your member savings..."
+)
+
 
 def _ns_minus(seconds: int) -> int:
     """Return chat.db-style date_ns for now minus N seconds."""
@@ -68,6 +84,44 @@ def test_find_tmobile_bill_sms_matches_monthly_wording():
     assert result is not None
     assert result["balance"] == 187.42
     assert result["sender"] == "2535"
+
+
+def test_tmobile_bill_re_matches_rcs_september():
+    """Regression: RCS message in September 2026 omits the 'T-Mobile: ' prefix
+    and begins directly with 'Your monthly bill...'."""
+    assert sms_utils.TMOBILE_BILL_RE.search(SAMPLE_TMO_RCS_SEPTEMBER) is not None
+
+
+def test_tmobile_bill_re_matches_available_wording():
+    """Wording variant: 'Your monthly bill ... is available' must match."""
+    assert sms_utils.TMOBILE_BILL_RE.search(SAMPLE_TMO_AVAILABLE) is not None
+
+
+def test_find_tmobile_bill_sms_matches_rcs_september():
+    fake_rows = [
+        (
+            SAMPLE_TMO_RCS_SEPTEMBER,
+            _ns_minus(3600),
+            "t-mobile_notifications_5lzgs0af_agent@rbm.goog",
+        )
+    ]
+    with patch.object(sms_utils, "_read_messages", return_value=fake_rows):
+        result = sms_utils.find_tmobile_bill_sms(within_days=14)
+    assert result is not None
+    assert result["balance"] == 188.94
+    assert result["sender"] == "t-mobile_notifications_5lzgs0af_agent@rbm.goog"
+
+
+def test_find_tmobile_bill_sms_rejects_unrelated_bill():
+    """An unrelated company's bill notification must not match even if it says
+    'your bill is ready'."""
+    unrelated_bill = (
+        "Your monthly bill for account 12345 is ready. Amount due is $50.00."
+    )
+    fake_rows = [(unrelated_bill, _ns_minus(3600), "99999")]
+    with patch.object(sms_utils, "_read_messages", return_value=fake_rows):
+        result = sms_utils.find_tmobile_bill_sms(within_days=14)
+    assert result is None
 
 
 def test_find_tmobile_bill_sms_returns_match():
