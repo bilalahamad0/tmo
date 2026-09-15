@@ -199,6 +199,7 @@ def _navigate_to_bill_page(page) -> None:
     click. We wait for the pop-up, Reject it, wait for the backdrop to clear,
     then click (with retries + a direct-navigation fallback).
     """
+    print("Navigating to bill page...", flush=True)
     # Wait for the consent pop-up to actually render, then Reject it.
     try:
         page.wait_for_selector(
@@ -217,6 +218,7 @@ def _navigate_to_bill_page(page) -> None:
     except Exception:
         pass
 
+    print(f"Looking for 'View bill' button (current URL: {page.url})...", flush=True)
     v_link = page.locator(
         'a:has-text("View bill"), button:has-text("View bill")'
     ).first
@@ -226,13 +228,15 @@ def _navigate_to_bill_page(page) -> None:
     clicked = False
     for attempt in range(6):
         try:
+            print(f"Clicking 'View bill' (attempt {attempt + 1})...", flush=True)
             v_link.click(timeout=8000)
             clicked = True
             break
         except Exception:
             print(
                 f"'View bill' click intercepted (attempt {attempt + 1}); "
-                "re-dismissing the consent pop-up..."
+                "re-dismissing the consent pop-up...",
+                flush=True,
             )
             _dismiss_overlays(page)
             try:
@@ -244,17 +248,19 @@ def _navigate_to_bill_page(page) -> None:
     if not clicked:
         # Fallback: the link's href is /bill/summary - navigate there directly,
         # which sidesteps any lingering overlay intercept.
-        print("Falling back to direct navigation to /bill/summary.")
+        print("Falling back to direct navigation to /bill/summary.", flush=True)
         page.goto(
             "https://www.t-mobile.com/bill/summary",
             wait_until="domcontentloaded",
             timeout=60000,
         )
 
+    print("Waiting for bill summary URL...", flush=True)
     page.wait_for_url("**/bill/summary**", timeout=60000)
     time.sleep(5)
     # Dismiss any overlays that appear on the bill summary page (MoEngage etc.)
     _dismiss_overlays(page)
+    print("Reached bill summary page!", flush=True)
 
 
 REJECT_BUTTON_PATTERN = re.compile(r"^(Reject|Decline|Reject All)$", re.IGNORECASE)
@@ -351,26 +357,29 @@ _dismiss_cookie_banner = _dismiss_overlays
 
 def _read_posted_date(page) -> str | None:
     """Extract 'Bill posted MM/DD/YYYY' from the bill summary page."""
+    print("Reading bill posted date...", flush=True)
     try:
         body_text = page.locator("body").inner_text(timeout=10000)
     except Exception as e:
-        print(f"Could not read bill page text: {e}")
+        print(f"Could not read bill page text: {e}", flush=True)
         return None
     posted = _parse_posted_date(body_text)
     if posted:
-        print(f"Bill posted date detected: {posted}")
+        print(f"Bill posted date detected: {posted}", flush=True)
     else:
-        print("Could not detect 'Bill posted MM/DD/YYYY' on the page.")
+        print("Could not detect 'Bill posted MM/DD/YYYY' on the page.", flush=True)
     return posted
 
 
 def _download_pdf(page) -> str:
     """Click the download button, save PDF to ~/Downloads, return path."""
+    print("Starting PDF download flow...", flush=True)
     # Defensive: re-dismiss any overlay that crept in since the page loaded.
     _dismiss_overlays(page)
 
     # The 'Download my bill (PDF)' label sometimes resolves to a non-clickable
     # inner div (aria-hidden=true). Click the enclosing clickable row instead.
+    print("Looking for 'Download my bill (PDF)' button...", flush=True)
     d_btn = (
         page.locator(
             'a:has-text("Download my bill (PDF)"), '
@@ -386,13 +395,15 @@ def _download_pdf(page) -> str:
         # Fallback to the bare text locator
         d_btn = page.locator('text="Download my bill (PDF)"').first
         d_btn.wait_for(state="visible", timeout=15000)
+    print("Clicking 'Download my bill (PDF)'...", flush=True)
     d_btn.click()
 
+    print("Waiting for 'Download summary bill' option...", flush=True)
     s_btn = page.get_by_text("Download summary bill", exact=True).first
     s_btn.wait_for(state="visible", timeout=30000)
     time.sleep(5)
 
-    print("Clicking 'Download summary bill'...")
+    print("Clicking 'Download summary bill'...", flush=True)
     try:
         with page.expect_download(timeout=120000) as d_info:
             s_btn.focus()

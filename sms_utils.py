@@ -19,14 +19,19 @@ from datetime import datetime
 COCOA_EPOCH_OFFSET = 978307200  # seconds between 1970-01-01 and 2001-01-01
 DB_PATH = os.path.expanduser("~/Library/Messages/chat.db")
 
-# T-Mobile sends a "bill is ready" SMS from short code 2535. The wording
-# varies between cycles, e.g.:
+# T-Mobile sends a "bill is ready / available" announcement from short codes
+# 2535, 456, or verified RCS agent (e.g.
+# t-mobile_notifications_5lzgs0af_agent@rbm.goog).
+# The wording varies across cycles:
 #   "Your bill for your account ending in 6522 is ready."   (balance due is $X)
-#   "Your monthly bill for account XXXXX6522 is ready."     (AutoPay withdrawal for $X)
-# so allow optional modifier words (e.g. "monthly") between "your" and "bill".
-# Sender (2535) match is a bonus signal, not required.
+#   "Your monthly bill for account XXXXX6522 is ready."     (withdrawal for $X)
+#   "Your monthly bill for account XXXXX6522 is available."
+# In RCS messages, the contact is already displayed as T-Mobile in the UI so
+# the message body omits the leading "T-Mobile: " prefix and begins directly
+# with "Your ... bill ...".
 TMOBILE_BILL_RE = re.compile(
-    r"T-?Mobile.{0,40}your\b.{0,30}bill.{0,80}is ready",
+    r"(?:T-?Mobile.{0,40}your\b|your\b).{0,30}bill.{0,80}"
+    r"(?:is\s+ready|is\s+(?:now\s+)?available|available)",
     re.IGNORECASE | re.DOTALL,
 )
 # Capture the dollar amount from either the "balance due is $X" phrasing or
@@ -157,6 +162,19 @@ def find_otp_code(
     return None
 
 
+def _is_tmobile_sender_or_content(text: str, sender: str | None) -> bool:
+    sender_s = (sender or "").lower()
+    text_l = (text or "").lower()
+    is_tmo_sender = any(
+        k in sender_s for k in ("2535", "456", "t-mobile", "tmobile")
+    )
+    is_tmo_text = any(
+        k in text_l
+        for k in ("t-mobile", "tmobile", "t-life", "secure.t-mobile")
+    )
+    return is_tmo_sender or is_tmo_text
+
+
 def find_tmobile_bill_sms(within_days: int = 14) -> dict | None:
     """Return info about the most recent T-Mobile 'bill is ready' SMS.
 
@@ -173,6 +191,8 @@ def find_tmobile_bill_sms(within_days: int = 14) -> dict | None:
     rows = _read_messages(within_seconds=within_days * 86400, limit=500)
     for text, date_ns, sender in rows:
         if not text or not TMOBILE_BILL_RE.search(text):
+            continue
+        if not _is_tmobile_sender_or_content(text, sender):
             continue
         ts = (date_ns / 1_000_000_000) + COCOA_EPOCH_OFFSET
         dt = datetime.fromtimestamp(ts)
