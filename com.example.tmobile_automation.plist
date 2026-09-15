@@ -20,48 +20,12 @@
         <string>__REPO_PATH__/auto_process.sh</string>
     </array>
     <key>StartCalendarInterval</key>
-    <array>
-        <dict>
-            <key>Hour</key>
-            <integer>9</integer>
-            <key>Minute</key>
-            <integer>0</integer>
-            <key>Day</key>
-            <integer>6</integer>
-        </dict>
-        <dict>
-            <key>Hour</key>
-            <integer>9</integer>
-            <key>Minute</key>
-            <integer>0</integer>
-            <key>Day</key>
-            <integer>7</integer>
-        </dict>
-        <dict>
-            <key>Hour</key>
-            <integer>9</integer>
-            <key>Minute</key>
-            <integer>0</integer>
-            <key>Day</key>
-            <integer>8</integer>
-        </dict>
-        <dict>
-            <key>Hour</key>
-            <integer>9</integer>
-            <key>Minute</key>
-            <integer>0</integer>
-            <key>Day</key>
-            <integer>9</integer>
-        </dict>
-        <dict>
-            <key>Hour</key>
-            <integer>9</integer>
-            <key>Minute</key>
-            <integer>0</integer>
-            <key>Day</key>
-            <integer>10</integer>
-        </dict>
-    </array>
+    <dict>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
     <key>StandardOutPath</key>
     <string>__REPO_PATH__/automation.log</string>
     <key>StandardErrorPath</key>

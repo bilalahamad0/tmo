@@ -179,3 +179,25 @@ def test_extract_bill_text_tolerates_empty_page(monkeypatch):
     lines = app._extract_bill_text("/fake.pdf")
 
     assert "real content" in lines
+
+
+# --------------------------------------------------------------------------
+# _is_bill_available
+# --------------------------------------------------------------------------
+
+def test_is_bill_available_past_or_on_day(monkeypatch):
+    class FakeDt:
+        day = 10
+
+    monkeypatch.setenv("BILL_AVAILABLE_DAY", "6")
+    monkeypatch.setattr("datetime.datetime", SimpleNamespace(now=lambda: FakeDt))
+    assert app._is_bill_available() is True
+
+
+def test_is_bill_available_before_day(monkeypatch):
+    class FakeDt:
+        day = 3
+
+    monkeypatch.setenv("BILL_AVAILABLE_DAY", "6")
+    monkeypatch.setattr("datetime.datetime", SimpleNamespace(now=lambda: FakeDt))
+    assert app._is_bill_available() is False

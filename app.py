@@ -311,6 +311,13 @@ def _trigger_zelle(amount: float) -> dict:
     return result
 
 
+def _is_bill_available() -> bool:
+    """Check if today is on or past the monthly bill availability date."""
+    from datetime import datetime as _dt
+    bill_day = int(os.getenv("BILL_AVAILABLE_DAY", "6"))
+    return _dt.now().day >= bill_day
+
+
 def _run_pipeline(
     year_month: str, explicit_pdf: str | None, force: bool = False
 ) -> int:
@@ -322,10 +329,13 @@ def _run_pipeline(
     """
     st = state_mod.load_state(year_month)
 
-    # Stage 0: T-Mobile SMS pre-check.
+    # Stage 0: T-Mobile bill availability check (SMS pre-check + date trigger).
     # If T-Mobile hasn't sent a 'Your bill is ready' SMS in the last 14 days,
-    # don't bother logging in (avoids wasted MFA pushes). Bypassed when an
-    # explicit PDF is provided or --force is set.
+    # and today is before the bill availability date (day 6), don't bother
+    # logging in (avoids wasted MFA pushes).
+    # If today is on or after the bill availability date (already in past date
+    # of Sep 6), the bill is available on the portal and we trigger download.
+    # Bypassed when an explicit PDF is provided or --force is set.
     #
     # Idempotency is gated on actual COMPLETION signals (zelle_confirmed_at),
     # NOT on having seen the SMS - otherwise a mid-pipeline failure would
@@ -339,22 +349,31 @@ def _run_pipeline(
             )
             return 0
         sms = sms_utils.find_tmobile_bill_sms(within_days=14)
-        if sms is None:
+        if sms is not None:
             print(
-                "Stage 0: No T-Mobile 'bill is ready' SMS in last 14 days. "
+                f"Stage 0: T-Mobile bill SMS found from {sms['iso_date']} "
+                f"(balance: ${sms.get('balance')}, sender: {sms.get('sender')})."
+            )
+            st = state_mod.update_state(
+                year_month,
+                bill_sms_date=sms["iso_date"],
+                bill_sms_balance=sms.get("balance"),
+            )
+        elif _is_bill_available():
+            bill_day = os.getenv("BILL_AVAILABLE_DAY", "6")
+            print(
+                f"Stage 0: No T-Mobile bill SMS found in chat.db, but bill is "
+                f"available (today is on or past day {bill_day}). "
+                "Proceeding to portal check."
+            )
+        else:
+            bill_day = os.getenv("BILL_AVAILABLE_DAY", "6")
+            print(
+                f"Stage 0: Prior to bill availability date (day {bill_day}) and "
+                "no T-Mobile 'bill is ready' SMS in last 14 days. "
                 "Exiting cleanly (no MFA push required)."
             )
             return 0
-        print(
-            f"Stage 0: T-Mobile bill SMS found from {sms['iso_date']} "
-            f"(balance: ${sms.get('balance')}, sender: {sms.get('sender')})."
-        )
-        # Save SMS info for cross-validation; not used as an idempotency gate.
-        st = state_mod.update_state(
-            year_month,
-            bill_sms_date=sms["iso_date"],
-            bill_sms_balance=sms.get("balance"),
-        )
 
     # Stage 1+2: download (or reuse explicit PDF)
     if explicit_pdf:
