@@ -173,6 +173,49 @@ def test_stage0_triggers_when_bill_available_past_date_without_sms(pipeline, mon
     pipeline.parse_bill.assert_called_once()
 
 
+def test_stage0_ignores_sms_from_previous_month_and_exits(pipeline, monkeypatch):
+    monkeypatch.setattr(app, "_is_bill_available", lambda: False)
+    pipeline.find_sms.return_value = {
+        "iso_date": "2026-04-25",
+        "balance": 188.94,
+        "sender": "2535",
+        "text": "Your bill from last month...",
+    }
+
+    rc = app._run_pipeline(YM, explicit_pdf=None, force=False)
+
+    assert rc == 0
+    pipeline.find_sms.assert_called_once()
+    pipeline.download.assert_not_called()
+    pipeline.parse_bill.assert_not_called()
+
+
+def test_stage0_with_require_bill_sms_exits_when_no_sms_even_past_bill_date(pipeline, monkeypatch):
+    monkeypatch.setenv("REQUIRE_BILL_SMS", "true")
+    monkeypatch.setattr(app, "_is_bill_available", lambda: True)
+    pipeline.find_sms.return_value = None
+
+    rc = app._run_pipeline(YM, explicit_pdf=None, force=False)
+
+    assert rc == 0
+    pipeline.find_sms.assert_called_once()
+    pipeline.download.assert_not_called()
+    pipeline.parse_bill.assert_not_called()
+
+
+def test_stage0_with_require_bill_sms_downloads_when_valid_sms(pipeline, monkeypatch):
+    monkeypatch.setenv("REQUIRE_BILL_SMS", "true")
+    monkeypatch.setattr(app, "_is_bill_available", lambda: False)
+
+    rc = app._run_pipeline(YM, explicit_pdf=None, force=False)
+
+    assert rc == 0
+    pipeline.find_sms.assert_called_once()
+    pipeline.download.assert_called_once()
+    pipeline.parse_bill.assert_called_once()
+
+
+
 def test_stage0_records_sms_then_downloads_and_proceeds(pipeline):
     rc = app._run_pipeline(YM, explicit_pdf=None, force=False)
 

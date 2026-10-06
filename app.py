@@ -349,6 +349,21 @@ def _run_pipeline(
             )
             return 0
         sms = sms_utils.find_tmobile_bill_sms(within_days=14)
+        if (
+            sms is not None
+            and sms.get("iso_date")
+            and sms["iso_date"] < f"{year_month}-01"
+        ):
+            print(
+                f"Stage 0: Found T-Mobile bill SMS from previous cycle "
+                f"({sms['iso_date']}), ignoring for {year_month}."
+            )
+            sms = None
+
+        require_sms = (
+            os.getenv("REQUIRE_BILL_SMS", "false").lower()
+            in ("true", "1", "yes")
+        )
         if sms is not None:
             print(
                 f"Stage 0: T-Mobile bill SMS found from {sms['iso_date']} "
@@ -359,7 +374,7 @@ def _run_pipeline(
                 bill_sms_date=sms["iso_date"],
                 bill_sms_balance=sms.get("balance"),
             )
-        elif _is_bill_available():
+        elif not require_sms and _is_bill_available():
             bill_day = os.getenv("BILL_AVAILABLE_DAY", "6")
             print(
                 f"Stage 0: No T-Mobile bill SMS found in chat.db, but bill is "
@@ -368,11 +383,19 @@ def _run_pipeline(
             )
         else:
             bill_day = os.getenv("BILL_AVAILABLE_DAY", "6")
-            print(
-                f"Stage 0: Prior to bill availability date (day {bill_day}) and "
-                "no T-Mobile 'bill is ready' SMS in last 14 days. "
-                "Exiting cleanly (no MFA push required)."
-            )
+            if require_sms:
+                print(
+                    "Stage 0: Strict SMS verification required "
+                    "(REQUIRE_BILL_SMS=true), and no T-Mobile 'bill is ready' "
+                    f"SMS found for {year_month} in chat.db. "
+                    "Exiting cleanly (no MFA push required)."
+                )
+            else:
+                print(
+                    f"Stage 0: Prior to bill availability date (day {bill_day}) "
+                    "and no T-Mobile 'bill is ready' SMS in last 14 days. "
+                    "Exiting cleanly (no MFA push required)."
+                )
             return 0
 
     # Stage 1+2: download (or reuse explicit PDF)

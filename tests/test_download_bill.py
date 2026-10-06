@@ -87,3 +87,45 @@ def test_sha256_differs_for_different_content(tmp_path):
     b.write_bytes(b"content B")
 
     assert download_bill._sha256(str(a)) != download_bill._sha256(str(b))
+
+
+# --------------------------------------------------------------------------
+# DASHBOARD_URL_PATTERN & BILL_PAGE_PATTERN
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.t-mobile.com/account-hub/dashboard",
+        "https://www.t-mobile.com/my-account/dashboard",
+        "https://www.t-mobile.com/account/dashboard",
+        "https://t-mobile.com/account-hub/dashboard?param=1",
+    ],
+)
+def test_dashboard_url_pattern_matches(url):
+    assert download_bill.DASHBOARD_URL_PATTERN.search(url) is not None
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.t-mobile.com/signin?state=xyz",
+        "https://account.t-mobile.com/signin",
+        "https://www.t-mobile.com/login",
+    ],
+)
+def test_dashboard_url_pattern_rejects_signin(url):
+    assert download_bill.DASHBOARD_URL_PATTERN.search(url) is None
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.t-mobile.com/bill/summary",
+        "https://www.t-mobile.com/account-hub/bill",
+        "https://www.t-mobile.com/bill",
+    ],
+)
+def test_bill_page_pattern_matches(url):
+    assert download_bill.BILL_PAGE_PATTERN.search(url) is not None
+
