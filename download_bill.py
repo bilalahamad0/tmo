@@ -26,6 +26,12 @@ load_dotenv()
 BILL_POSTED_PATTERN = re.compile(
     r"Bill\s+posted\s+(\d{1,2})/(\d{1,2})/(\d{4})", re.IGNORECASE
 )
+DASHBOARD_URL_PATTERN = re.compile(
+    r"/(?:my-account|account-hub|account)/dashboard", re.IGNORECASE
+)
+BILL_PAGE_PATTERN = re.compile(
+    r"/(?:bill/summary|account-hub/bill|bill)", re.IGNORECASE
+)
 BROWSER_PROFILE_DIR = os.path.expanduser("~/.tmo_browser_profile")
 
 
@@ -49,7 +55,7 @@ def _parse_posted_date(text: str) -> str | None:
         return None
 
 
-def _login(page, t_user: str) -> None:
+def _login(page, t_user: str, t_pass: str | None = None) -> None:
     """Phase 1: go to dashboard; if persistent session is active, skip login.
 
     With the persistent browser profile, T-Mobile remembers the session and
@@ -80,8 +86,15 @@ def _login(page, t_user: str) -> None:
     on_signin = (
         "signin" in url_l or "/login" in url_l or "account.t-mobile.com" in url_l
     )
-    if not on_signin and "/my-account/dashboard" in url_l:
-        print("Already logged in via persistent profile. Skipping login flow.")
+    if not on_signin and (
+        "/my-account/dashboard" in url_l
+        or "/account-hub/dashboard" in url_l
+        or "dashboard" in url_l
+    ):
+        print(
+            "Already logged in via persistent profile. Skipping login flow.",
+            flush=True,
+        )
         return
 
     print(f"Sign-in screen detected (url={page.url}); logging in...")
@@ -184,9 +197,11 @@ def _login(page, t_user: str) -> None:
     except Exception:
         pass
 
-    print("Waiting up to 5 minutes for approval to reach dashboard...")
-    page.wait_for_url("**/my-account/dashboard**", timeout=300000)
-    print("Successfully reached the dashboard!")
+    print(
+        "Waiting up to 5 minutes for approval to reach dashboard...", flush=True
+    )
+    page.wait_for_url(DASHBOARD_URL_PATTERN, timeout=300000)
+    print("Successfully reached the dashboard!", flush=True)
     _dismiss_cookie_banner(page)
 
 
@@ -256,7 +271,7 @@ def _navigate_to_bill_page(page) -> None:
         )
 
     print("Waiting for bill summary URL...", flush=True)
-    page.wait_for_url("**/bill/summary**", timeout=60000)
+    page.wait_for_url(BILL_PAGE_PATTERN, timeout=60000)
     time.sleep(5)
     # Dismiss any overlays that appear on the bill summary page (MoEngage etc.)
     _dismiss_overlays(page)
@@ -471,7 +486,7 @@ def download_tmobile_bill(known_posted_date: str | None = None) -> dict:
         Stealth().apply_stealth_sync(page)
 
         try:
-            _login(page, t_user)
+            _login(page, t_user, t_pass)
         except Exception as e:
             print(f"Error during Phase 1 Login: {e}")
             screenshot = "login_error.png"
