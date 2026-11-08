@@ -414,8 +414,23 @@ def _download_pdf(page) -> str:
     d_btn.click()
 
     print("Waiting for 'Download summary bill' option...", flush=True)
-    s_btn = page.get_by_text("Download summary bill", exact=True).first
-    s_btn.wait_for(state="visible", timeout=30000)
+    s_btn = (
+        page.locator(
+            'button:has-text("Bill summary PDF"), '
+            'button:has-text("Download summary bill"), '
+            'a:has-text("Bill summary PDF"), '
+            'a:has-text("Download summary bill"), '
+            '[role="button"]:has-text("Bill summary PDF"), '
+            '[role="button"]:has-text("Download summary bill")'
+        )
+        .filter(visible=True)
+        .first
+    )
+    try:
+        s_btn.wait_for(state="visible", timeout=30000)
+    except Exception:
+        s_btn = page.locator('text="Bill summary PDF", text="Download summary bill"').first
+        s_btn.wait_for(state="visible", timeout=15000)
     time.sleep(5)
 
     print("Clicking 'Download summary bill'...", flush=True)
